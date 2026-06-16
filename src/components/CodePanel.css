@@ -1,0 +1,100 @@
+.code-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+/* ツールバー */
+.code-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.code-toolbar__title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+  flex: 1;
+}
+
+.code-toolbar__lang {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.code-toolbar__btn {
+  font-size: 12px;
+  background: transparent;
+  color: var(--color-text-dim);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.code-toolbar__btn:hover { color: var(--color-text); border-color: var(--color-accent); }
+.code-toolbar__btn--active { color: var(--color-accent); border-color: var(--color-accent); }
+
+/* コードエリア */
+.code-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.code-display {
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--color-text);
+  white-space: pre;
+  user-select: text;
+}
+
+.code-display code {
+  font-family: inherit;
+}
+
+.code-editor {
+  width: 100%;
+  height: 100%;
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: none;
+  outline: none;
+  resize: none;
+  tab-size: 2;
+}
+
+/* ヒント */
+.code-hint {
+  font-size: 11px;
+  color: var(--color-text-dim);
+  padding: 6px 14px;
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+  user-select: none;
+}
