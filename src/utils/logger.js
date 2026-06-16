@@ -1,22 +1,17 @@
 const API_BASE = '/api'
 
 export function generateSessionId() {
-  const rand = Math.random().toString(36).slice(2, 8)
-  return `sess_${Date.now()}_${rand}`
+  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export async function logEvent(sessionId, eventType, payload = {}) {
+export async function logEvent(event) {
   try {
     await fetch(`${API_BASE}/log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId,
-        eventType,
-        payload,
-      }),
+      body: JSON.stringify(event),
     })
   } catch (error) {
-    console.warn('ログ送信に失敗しました', error)
+    console.warn('ログ保存に失敗しました', error)
   }
 }
