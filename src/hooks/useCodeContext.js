@@ -1,52 +1,60 @@
-/**
- * コードパネルの状態管理フック
- * - コード文字列・言語・選択テキストを一元管理
- *
- * 将来の拡張:
- *  - 複数ファイルタブ
- *  - コードのバージョン履歴（diff表示）
- *  - ファイルアップロード対応
- */
-
-import { useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { logEvent } from '../utils/logger'
 
-const SAMPLE_CODE = `# サンプル: バブルソート (Python)
-def bubble_sort(arr):
-    n = len(arr)
+const SAMPLE_CODE = `# サンプル: バブルソート
+def bubble_sort(numbers):
+    n = len(numbers)
     for i in range(n):
         swapped = False
         for j in range(0, n - i - 1):
-            if arr[j] > arr[j + 1]:
-                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+            if numbers[j] > numbers[j + 1]:
+                numbers[j], numbers[j + 1] = numbers[j + 1], numbers[j]
                 swapped = True
         if not swapped:
             break
-    return arr
+    return numbers
 
-# 使用例
-numbers = [64, 34, 25, 12, 22, 11, 90]
-print(bubble_sort(numbers))
+values = [64, 34, 25, 12, 22, 11, 90]
+print(bubble_sort(values))
 `
 
 export function useCodeContext(sessionId) {
   const [code, setCode] = useState(SAMPLE_CODE)
-  const [language, setLanguage] = useState('python')
+  const [language, setLanguageState] = useState('python')
   const [selectedText, setSelectedText] = useState('')
 
-  const loadCode = useCallback((newCode, lang = 'unknown') => {
+  const loadCode = useCallback((newCode, lang = language) => {
     setCode(newCode)
-    setLanguage(lang)
+    setLanguageState(lang)
     setSelectedText('')
-    logEvent(sessionId, 'code_load', { language: lang, length: newCode.length })
+    logEvent(sessionId, 'code_load', {
+      language: lang,
+      length: newCode.length,
+    })
+  }, [language, sessionId])
+
+  const setLanguage = useCallback((lang) => {
+    setLanguageState(lang)
+    logEvent(sessionId, 'language_change', { language: lang })
   }, [sessionId])
 
   const handleSelection = useCallback((text) => {
-    setSelectedText(text)
-    if (text) {
-      logEvent(sessionId, 'code_select', { selectedText: text })
+    const normalized = text.trim()
+    setSelectedText(normalized)
+    if (normalized) {
+      logEvent(sessionId, 'code_select', {
+        selectedText: normalized,
+        length: normalized.length,
+      })
     }
   }, [sessionId])
 
-  return { code, language, selectedText, loadCode, handleSelection, setLanguage }
+  return {
+    code,
+    language,
+    selectedText,
+    loadCode,
+    setLanguage,
+    handleSelection,
+  }
 }

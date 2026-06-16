@@ -1,28 +1,25 @@
-/**
- * チャット状態管理フック
- *
- * 将来の拡張:
- *  - メッセージ履歴の永続化（sessionStorage / IndexedDB）
- *  - ストリーミングレスポンス対応（SSE）
- *  - 会話リセット・分岐機能
- */
-
-import { useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { buildSystemPrompt } from '../utils/systemPrompt'
 import { logEvent } from '../utils/logger'
 
 const API_BASE = '/api'
 
+const INITIAL_MESSAGE = {
+  role: 'assistant',
+  content: 'まず、このコード全体は何をするためのものに見えますか？根拠になりそうな行を1つ探してみましょう。',
+}
+
 export function useChat({ sessionId, codeContext, settings }) {
-  const [messages, setMessages] = useState([])   // { role: 'user'|'assistant', content: string }[]
+  const [messages, setMessages] = useState([INITIAL_MESSAGE])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
   const sendMessage = useCallback(async (userText) => {
-    if (!userText.trim() || isLoading) return
+    const trimmed = userText.trim()
+    if (!trimmed || isLoading) return
 
-    const newMessages = [...messages, { role: 'user', content: userText }]
-    setMessages(newMessages)
+    const nextMessages = [...messages, { role: 'user', content: trimmed }]
+    setMessages(nextMessages)
     setIsLoading(true)
     setError(null)
 
@@ -30,38 +27,57 @@ export function useChat({ sessionId, codeContext, settings }) {
       const systemPrompt = buildSystemPrompt({
         language: codeContext.language,
         level: settings.level,
+        mode: settings.mode,
       })
 
-      const res = await fetch(`${API_BASE}/chat`, {
+      const apiMessages = nextMessages
+        .filter((message, index) => index !== 0 && (message.role === 'user' || message.role === 'assistant'))
+        .map(message => ({
+          role: message.role,
+          content: message.content,
+        }))
+
+      const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: newMessages,
+          messages: apiMessages,
           systemPrompt,
           sessionId,
           codeContext: {
             code: codeContext.code,
+            language: codeContext.language,
             selectedText: codeContext.selectedText,
           },
+          settings,
         }),
       })
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { reply } = await res.json()
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`)
+      }
 
-      setMessages(prev => [...prev, { role: 'assistant', content: reply }])
+      setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
     } catch (err) {
       setError(err.message)
+      logEvent(sessionId, 'chat_error', { message: err.message })
     } finally {
       setIsLoading(false)
     }
-  }, [messages, isLoading, sessionId, codeContext, settings])
+  }, [codeContext, isLoading, messages, sessionId, settings])
 
   const resetChat = useCallback(() => {
-    setMessages([])
+    setMessages([INITIAL_MESSAGE])
     setError(null)
     logEvent(sessionId, 'chat_reset')
   }, [sessionId])
 
-  return { messages, isLoading, error, sendMessage, resetChat }
+  return {
+    messages,
+    isLoading,
+    error,
+    sendMessage,
+    resetChat,
+  }
 }

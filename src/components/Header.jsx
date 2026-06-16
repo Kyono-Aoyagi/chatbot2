@@ -1,48 +1,83 @@
-/**
- * グローバルヘッダー
- * 将来: コース選択・ユーザー情報・設定へのナビゲーション
- */
-
-import { LEVEL_LABELS } from '../utils/systemPrompt'
+import { LEVEL_LABELS, MODE_LABELS } from '../utils/systemPrompt'
 import './Header.css'
 
-export function Header({ settings, onSettingsChange, onCodeLoad }) {
-  const handleFileOpen = (e) => {
-    const file = e.target.files?.[0]
+const LANGUAGE_BY_EXTENSION = {
+  py: 'python',
+  js: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  java: 'java',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  hpp: 'cpp',
+  go: 'go',
+  rs: 'rust',
+  rb: 'ruby',
+  php: 'php',
+  txt: 'text',
+}
+
+export function Header({ settings, sessionLabel, onSettingsChange, onCodeLoad }) {
+  const handleFileOpen = (event) => {
+    const file = event.target.files?.[0]
     if (!file) return
+
     const reader = new FileReader()
-    reader.onload = (ev) => {
-      const ext = file.name.split('.').pop().toLowerCase()
-      const langMap = { py: 'python', js: 'javascript', ts: 'typescript', java: 'java', c: 'c', cpp: 'cpp', go: 'go', rs: 'rust' }
-      onCodeLoad(ev.target.result, langMap[ext] ?? 'other')
+    reader.onload = (readerEvent) => {
+      const text = String(readerEvent.target?.result ?? '')
+      const ext = file.name.split('.').pop()?.toLowerCase()
+      onCodeLoad(text, LANGUAGE_BY_EXTENSION[ext] ?? 'unknown')
     }
     reader.readAsText(file)
-    e.target.value = ''
+    event.target.value = ''
+  }
+
+  const updateSetting = (key, value) => {
+    onSettingsChange({ ...settings, [key]: value })
   }
 
   return (
     <header className="app-header">
       <div className="app-header__brand">
-        <span className="app-header__logo">◈</span>
-        <span className="app-header__name">コードリーディング支援</span>
+        <span className="app-header__logo" aria-hidden="true">CR</span>
+        <div>
+          <div className="app-header__name">コードリーディング支援</div>
+          <div className="app-header__session">Session {sessionLabel}</div>
+        </div>
       </div>
 
       <div className="app-header__controls">
-        {/* ファイル読み込み */}
-        <label className="header-btn" title="ファイルを開く">
-          📂 ファイルを開く
-          <input type="file" hidden accept=".py,.js,.ts,.java,.c,.cpp,.go,.rs,.txt" onChange={handleFileOpen} />
+        <label className="header-btn">
+          ファイルを開く
+          <input
+            type="file"
+            hidden
+            accept=".py,.js,.jsx,.ts,.tsx,.java,.c,.h,.cpp,.hpp,.go,.rs,.rb,.php,.txt"
+            onChange={handleFileOpen}
+          />
         </label>
 
-        {/* 難易度選択 */}
         <select
           className="header-select"
           value={settings.level}
-          onChange={e => onSettingsChange({ ...settings, level: e.target.value })}
+          onChange={event => updateSetting('level', event.target.value)}
           aria-label="学習レベル"
         >
-          {Object.entries(LEVEL_LABELS).map(([val, label]) => (
-            <option key={val} value={val}>{label}</option>
+          {Object.entries(LEVEL_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+
+        <select
+          className="header-select"
+          value={settings.mode}
+          onChange={event => updateSetting('mode', event.target.value)}
+          aria-label="応答モード"
+        >
+          {Object.entries(MODE_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
           ))}
         </select>
       </div>

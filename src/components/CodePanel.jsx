@@ -1,82 +1,87 @@
-/**
- * 左ペイン: コード表示パネル
- *
- * 将来の拡張:
- *  - Monaco Editor 統合（シンタックスハイライト強化・行番号クリック）
- *  - 行単位のコメント/アノテーション
- *  - ファイルドロップ対応
- */
-
-import { useRef, useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import './CodePanel.css'
 
-const LANGUAGES = ['python', 'javascript', 'typescript', 'java', 'c', 'cpp', 'go', 'rust', 'other']
+const LANGUAGES = [
+  'python',
+  'javascript',
+  'typescript',
+  'java',
+  'c',
+  'cpp',
+  'go',
+  'rust',
+  'ruby',
+  'php',
+  'text',
+  'unknown',
+]
 
-export function CodePanel({ code, language, onCodeChange, onLanguageChange, onSelection }) {
-  const textareaRef = useRef(null)
+export function CodePanel({
+  code,
+  language,
+  selectedText,
+  onCodeChange,
+  onLanguageChange,
+  onSelection,
+}) {
   const [isEditing, setIsEditing] = useState(false)
 
-  // テキスト選択を親に通知
-  const handleMouseUp = () => {
-    const sel = window.getSelection()?.toString().trim()
-    if (sel) onSelection(sel)
+  const lineCount = useMemo(() => code.split('\n').length, [code])
+
+  const handleSelection = () => {
+    const selection = window.getSelection()?.toString() ?? ''
+    onSelection(selection)
   }
 
-  // コードが外部から変わった時にスクロールをトップへ
-  useEffect(() => {
-    if (textareaRef.current && !isEditing) {
-      textareaRef.current.scrollTop = 0
-    }
-  }, [code, isEditing])
-
   return (
-    <section className="code-panel" aria-label="コードビューア">
-      {/* ツールバー */}
+    <div className="code-panel">
       <div className="code-toolbar">
-        <span className="code-toolbar__title">コード</span>
+        <div className="code-toolbar__meta">
+          <span className="code-toolbar__title">Code</span>
+          <span className="code-toolbar__count">{lineCount} lines</span>
+        </div>
 
         <select
           className="code-toolbar__lang"
           value={language}
-          onChange={e => onLanguageChange(e.target.value)}
-          aria-label="言語選択"
+          onChange={event => onLanguageChange(event.target.value)}
+          aria-label="言語"
         >
-          {LANGUAGES.map(l => (
-            <option key={l} value={l}>{l}</option>
+          {LANGUAGES.map(item => (
+            <option key={item} value={item}>{item}</option>
           ))}
         </select>
 
         <button
           className={`code-toolbar__btn ${isEditing ? 'code-toolbar__btn--active' : ''}`}
-          onClick={() => setIsEditing(v => !v)}
-          title={isEditing ? '表示モードに切替' : '編集モードに切替'}
+          onClick={() => setIsEditing(value => !value)}
+          type="button"
         >
-          {isEditing ? '✓ 完了' : '✎ 編集'}
+          {isEditing ? '表示' : '編集'}
         </button>
       </div>
 
-      {/* コードエリア */}
-      <div className="code-body" onMouseUp={handleMouseUp}>
+      <div className="code-body" onMouseUp={handleSelection} onKeyUp={handleSelection}>
         {isEditing ? (
           <textarea
-            ref={textareaRef}
             className="code-editor"
             value={code}
-            onChange={e => onCodeChange(e.target.value)}
+            onChange={event => onCodeChange(event.target.value, language)}
             spellCheck={false}
-            aria-label="コード編集エリア"
+            aria-label="コード編集"
           />
         ) : (
-          <pre className="code-display">
+          <pre className="code-display" tabIndex={0}>
             <code>{code}</code>
           </pre>
         )}
       </div>
 
-      {/* 選択テキストのヒント */}
       <div className="code-hint">
-        コードを選択してチャットに送ると、その部分について質問できます
+        {selectedText
+          ? `選択中: ${selectedText.slice(0, 60)}${selectedText.length > 60 ? '...' : ''}`
+          : '気になる行や式を選択すると、その範囲をもとに質問できます。'}
       </div>
-    </section>
+    </div>
   )
 }

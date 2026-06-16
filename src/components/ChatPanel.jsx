@@ -1,13 +1,4 @@
-/**
- * 右ペイン: チャットパネル
- *
- * 将来の拡張:
- *  - メッセージへのピン留め・引用機能
- *  - チャット履歴のエクスポート
- *  - 音声入力対応
- */
-
-import { useRef, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './ChatPanel.css'
 
 export function ChatPanel({ messages, isLoading, error, selectedText, onSend, onReset }) {
@@ -15,109 +6,102 @@ export function ChatPanel({ messages, isLoading, error, selectedText, onSend, on
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
 
-  // 新しいメッセージが来たら最下部へスクロール
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isLoading])
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [messages, isLoading, error])
 
   const submit = () => {
-    if (!input.trim()) return
-    onSend(input.trim())
+    const text = input.trim()
+    if (!text || isLoading) return
+    onSend(text)
     setInput('')
   }
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
       submit()
     }
   }
 
-  // 選択テキストをインプットに挿入
-  const insertSelection = () => {
+  const insertSelectedText = () => {
     if (!selectedText) return
-    setInput(prev => prev ? `${prev}\n\n選択箇所: 「${selectedText}」` : `選択箇所: 「${selectedText}」`)
+    const quote = `選択範囲:\n${selectedText}`
+    setInput(current => (current.trim() ? `${current}\n\n${quote}` : quote))
     inputRef.current?.focus()
   }
 
   return (
-    <section className="chat-panel" aria-label="チャット">
-      {/* ヘッダー */}
+    <div className="chat-panel">
       <div className="chat-header">
-        <span className="chat-header__title">チューター</span>
-        <button className="chat-header__reset" onClick={onReset} title="会話をリセット">
-          ↺ リセット
+        <div>
+          <div className="chat-header__title">Tutor</div>
+          <div className="chat-header__subtitle">説明より、読むための問いを返します</div>
+        </div>
+        <button className="chat-header__reset" onClick={onReset} type="button">
+          リセット
         </button>
       </div>
 
-      {/* メッセージ一覧 */}
       <div className="chat-messages">
-        {messages.length === 0 && (
-          <div className="chat-empty">
-            <p className="chat-empty__icon">🔍</p>
-            <p className="chat-empty__text">
-              左のコードを読んで、気になる点や疑問を入力してください。<br />
-              チューターが質問を通じて思考を深めるサポートをします。
-            </p>
-          </div>
-        )}
-
-        {messages.map((msg, i) => (
-          <div key={i} className={`chat-message chat-message--${msg.role}`}>
+        {messages.map((message, index) => (
+          <article key={`${message.role}-${index}`} className={`chat-message chat-message--${message.role}`}>
             <span className="chat-message__label">
-              {msg.role === 'user' ? 'あなた' : 'チューター'}
+              {message.role === 'user' ? 'あなた' : 'チューター'}
             </span>
-            <div className="chat-message__content">{msg.content}</div>
-          </div>
+            <div className="chat-message__content">{message.content}</div>
+          </article>
         ))}
 
         {isLoading && (
-          <div className="chat-message chat-message--assistant">
+          <article className="chat-message chat-message--assistant">
             <span className="chat-message__label">チューター</span>
-            <div className="chat-loading">
-              <span /><span /><span />
+            <div className="chat-loading" aria-label="返信を生成中">
+              <span />
+              <span />
+              <span />
             </div>
-          </div>
+          </article>
         )}
 
         {error && (
-          <div className="chat-error">⚠ {error}</div>
+          <div className="chat-error" role="alert">
+            {error}
+          </div>
         )}
 
         <div ref={bottomRef} />
       </div>
 
-      {/* 選択テキスト挿入バー */}
       {selectedText && (
-        <button className="chat-selection-bar" onClick={insertSelection}>
+        <button className="chat-selection-bar" onClick={insertSelectedText} type="button">
           <span className="chat-selection-bar__text">
-            「{selectedText.slice(0, 40)}{selectedText.length > 40 ? '…' : ''}」を質問に追加
+            選択範囲を質問に追加: {selectedText.slice(0, 44)}{selectedText.length > 44 ? '...' : ''}
           </span>
-          <span className="chat-selection-bar__icon">＋</span>
+          <span className="chat-selection-bar__icon" aria-hidden="true">+</span>
         </button>
       )}
 
-      {/* 入力エリア */}
       <div className="chat-input-area">
         <textarea
           ref={inputRef}
           className="chat-input"
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={event => setInput(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="質問や考えを入力（Enter で送信、Shift+Enter で改行）"
+          placeholder="気づいたこと、迷っていることを書いてください"
           rows={3}
-          aria-label="メッセージ入力"
+          aria-label="メッセージ"
         />
         <button
           className="chat-send"
           onClick={submit}
           disabled={isLoading || !input.trim()}
-          aria-label="送信"
+          type="button"
         >
           送信
         </button>
       </div>
-    </section>
+    </div>
   )
 }

@@ -1,13 +1,9 @@
-/**
- * フロントエンド側のロガー
- * サーバーの /api/log エンドポイントにイベントを送信する
- *
- * 将来の拡張:
- *  - オフライン時のキューイング（localStorage → 再接続時に送信）
- *  - イベント種別の拡張（コードのスクロール位置、滞在時間など）
- */
-
 const API_BASE = '/api'
+
+export function generateSessionId() {
+  const rand = Math.random().toString(36).slice(2, 8)
+  return `sess_${Date.now()}_${rand}`
+}
 
 export async function logEvent(sessionId, eventType, payload = {}) {
   try {
@@ -16,20 +12,11 @@ export async function logEvent(sessionId, eventType, payload = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId,
-        eventType,   // 'highlight' | 'code_load' | 'session_start' | ...
-        ...payload,
+        eventType,
+        payload,
       }),
     })
-  } catch (err) {
-    // ログ失敗はサイレントに（学習体験を妨げない）
-    console.warn('ログ送信失敗:', err)
+  } catch (error) {
+    console.warn('ログ送信に失敗しました', error)
   }
-}
-
-/**
- * セッションIDを生成（UUIDライク）
- * 将来: 認証後はサーバー発行のIDに置き換え
- */
-export function generateSessionId() {
-  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }

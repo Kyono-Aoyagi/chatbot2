@@ -1,78 +1,78 @@
-/**
- * App.jsx — ルートコンポーネント
- *
- * レイアウト: Header + [CodePanel | ChatPanel]
- * 状態はすべてカスタムフックに委譲し、コンポーネントは表示のみ担当
- *
- * 将来の拡張ポイント:
- *  - React Router でページ分割（課題一覧 / セッション / ログビューア）
- *  - Context または Zustand でグローバル状態管理
- *  - ドラッグ可能なスプリッターでペイン幅を調整
- */
-
-import { useState, useEffect } from 'react'
-import { Header }     from './components/Header'
-import { CodePanel }  from './components/CodePanel'
-import { ChatPanel }  from './components/ChatPanel'
-import { useChat }         from './hooks/useChat'
-import { useCodeContext }  from './hooks/useCodeContext'
+import { useEffect, useMemo, useState } from 'react'
+import { Header } from './components/Header'
+import { CodePanel } from './components/CodePanel'
+import { ChatPanel } from './components/ChatPanel'
+import { useChat } from './hooks/useChat'
+import { useCodeContext } from './hooks/useCodeContext'
 import { generateSessionId, logEvent } from './utils/logger'
 import './styles/layout.css'
 
-// セッションIDはアプリ起動時に1度だけ生成
 const SESSION_ID = generateSessionId()
 
 export default function App() {
-  const [settings, setSettings] = useState({ level: 'beginner' })
+  const [settings, setSettings] = useState({
+    level: 'beginner',
+    mode: 'socratic',
+  })
 
-  const codeCtx = useCodeContext(SESSION_ID)
-
-  const { messages, isLoading, error, sendMessage, resetChat } = useChat({
+  const codeContext = useCodeContext(SESSION_ID)
+  const chat = useChat({
     sessionId: SESSION_ID,
-    codeContext: codeCtx,
+    codeContext,
     settings,
   })
 
-  // セッション開始ログ
+  const sessionLabel = useMemo(() => {
+    const date = new Date()
+    return date.toLocaleString('ja-JP', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }, [])
+
   useEffect(() => {
-    logEvent(SESSION_ID, 'session_start')
+    logEvent(SESSION_ID, 'session_start', {
+      settings,
+      language: codeContext.language,
+    })
   }, [])
 
   return (
     <div className="app-shell">
       <Header
         settings={settings}
+        sessionLabel={sessionLabel}
         onSettingsChange={setSettings}
-        onCodeLoad={codeCtx.loadCode}
+        onCodeLoad={codeContext.loadCode}
       />
 
-      <div className="app-body">
-        {/* 左: コードビューア */}
-        <div className="pane pane--code">
+      <main className="app-body">
+        <section className="pane pane--code" aria-label="コード表示">
           <CodePanel
-            code={codeCtx.code}
-            language={codeCtx.language}
-            onCodeChange={codeCtx.loadCode}
-            onLanguageChange={codeCtx.setLanguage}
-            onSelection={codeCtx.handleSelection}
+            code={codeContext.code}
+            language={codeContext.language}
+            selectedText={codeContext.selectedText}
+            onCodeChange={codeContext.loadCode}
+            onLanguageChange={codeContext.setLanguage}
+            onSelection={codeContext.handleSelection}
           />
-        </div>
+        </section>
 
-        {/* 仕切り（将来: ドラッグリサイズ） */}
         <div className="pane-divider" role="separator" aria-orientation="vertical" />
 
-        {/* 右: チャット */}
-        <div className="pane pane--chat">
+        <section className="pane pane--chat" aria-label="対話支援">
           <ChatPanel
-            messages={messages}
-            isLoading={isLoading}
-            error={error}
-            selectedText={codeCtx.selectedText}
-            onSend={sendMessage}
-            onReset={resetChat}
+            messages={chat.messages}
+            isLoading={chat.isLoading}
+            error={chat.error}
+            selectedText={codeContext.selectedText}
+            onSend={chat.sendMessage}
+            onReset={chat.resetChat}
           />
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
   )
 }
