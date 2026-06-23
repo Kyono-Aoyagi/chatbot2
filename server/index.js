@@ -2,6 +2,7 @@ import http from 'http'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { askGemini } from './gemini.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 3001)
@@ -44,22 +45,8 @@ function readJson(req) {
 function appendLog(event) {
   const date = new Date().toISOString().slice(0, 10)
   const filePath = path.join(LOG_DIR, `${date}.jsonl`)
-  const entry = {
-    timestamp: new Date().toISOString(),
-    ...event,
-  }
-
+  const entry = { timestamp: new Date().toISOString(), ...event }
   fs.appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf8')
-}
-
-function readLogs(date) {
-  const filePath = path.join(LOG_DIR, `${date}.jsonl`)
-  if (!fs.existsSync(filePath)) return []
-
-  return fs.readFileSync(filePath, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map(line => JSON.parse(line))
 }
 
 const server = http.createServer(async (req, res) => {
@@ -70,24 +57,34 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
 
   try {
+    if (req.method === 'POST' && url.pathname === '/api/chat') {
+      const body = await readJson(req)
+      const { activeCode, currentStep, history, userMessage, sessionId } = body
+
+      if (!activeCode?.code || !userMessage) {
+        return sendJson(res, 400, { error: 'activeCode.code と userMessage は必須です。' })
+      }
+
+      const { reply, advance } = await askGemini({ activeCode, currentStep, history, userMessage })
+
+      appendLog({ sessionId, eventType: 'chat', currentStep, userMessage, reply, advance })
+
+      return sendJson(res, 200, { reply, advance })
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/log') {
       const event = await readJson(req)
       appendLog(event)
       return sendJson(res, 200, { ok: true })
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/logs') {
-      const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10)
-      return sendJson(res, 200, { logs: readLogs(date) })
-    }
-
     return sendJson(res, 404, { error: 'Not found' })
   } catch (error) {
-    console.error(error)
+    console.error('[server error]', error)
     return sendJson(res, 500, { error: error.message })
   }
 })
 
 server.listen(PORT, () => {
-  console.log(`Log server listening on http://localhost:${PORT}`)
+  console.log(`Server listening on http://localhost:${PORT}`)
 })

@@ -6,9 +6,10 @@
   --text: #1f2733;
   --muted: #667085;
   --accent: #2563eb;
+  --accent-hover: #1d4ed8;
   --bot: #f0f4ff;
   --user: #e8f5ee;
-  --danger: #b45309;
+  --error: #dc2626;
   --mono: "Consolas", "Menlo", monospace;
   --ui: "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
 }
@@ -32,9 +33,13 @@ body {
 }
 
 button,
-textarea {
+textarea,
+input,
+select {
   font: inherit;
 }
+
+/* ---- 共通レイアウト ---- */
 
 .app {
   display: flex;
@@ -51,6 +56,7 @@ textarea {
   padding: 14px 18px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .header h1 {
@@ -62,6 +68,22 @@ textarea {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* ---- ボタン ---- */
+
+.primary-button {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  padding: 9px 20px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.primary-button:hover {
+  background: var(--accent-hover);
 }
 
 .secondary-button {
@@ -76,6 +98,135 @@ textarea {
 .secondary-button:hover {
   border-color: var(--accent);
 }
+
+/* ---- コード選択画面 ---- */
+
+.selection-main {
+  flex: 1;
+  padding: 24px;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-bottom: -1px;
+}
+
+.tab-button--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preset-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.preset-card:hover {
+  border-color: var(--accent);
+}
+
+.preset-card__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.preset-card__meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.paste-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.paste-form__row {
+  display: flex;
+  gap: 12px;
+}
+
+.paste-form__label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.paste-form__input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 14px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.paste-form__input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.2);
+  border-color: var(--accent);
+}
+
+.paste-form__textarea {
+  height: 280px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.paste-form__textarea:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.2);
+  border-color: var(--accent);
+}
+
+.paste-form__error {
+  margin: 0;
+  color: var(--error);
+  font-size: 13px;
+}
+
+/* ---- チャット画面 ---- */
 
 .main {
   display: grid;
@@ -107,6 +258,7 @@ textarea {
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: 13px;
+  flex-shrink: 0;
 }
 
 .code-block {
@@ -167,11 +319,27 @@ textarea {
   border: 1px solid #cbd8ff;
 }
 
+.message-body--loading {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.chat-error {
+  margin: 0;
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: var(--error);
+  font-size: 13px;
+}
+
 .input-area {
   display: flex;
   gap: 8px;
   padding: 12px;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .input-area textarea {
@@ -189,6 +357,11 @@ textarea {
   border-color: var(--accent);
 }
 
+.input-area textarea:disabled {
+  background: var(--panel-muted);
+  color: var(--muted);
+}
+
 .input-area button {
   align-self: flex-end;
   min-width: 72px;
@@ -200,18 +373,16 @@ textarea {
   cursor: pointer;
 }
 
+.input-area button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
 .input-area button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.footer {
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  background: var(--panel);
-  font-size: 12px;
-}
+/* ---- レスポンシブ ---- */
 
 @media (max-width: 820px) {
   .main {
