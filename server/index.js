@@ -59,15 +59,32 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'POST' && url.pathname === '/api/chat') {
       const body = await readJson(req)
-      const { activeCode, currentStep, history, userMessage, sessionId } = body
+      const { activeCode, currentStep, userMessage, sessionId } = body
 
-      if (!activeCode?.code || !userMessage) {
-        return sendJson(res, 400, { error: 'activeCode.code と userMessage は必須です。' })
+      if (!activeCode?.code || !userMessage || !sessionId) {
+        return sendJson(res, 400, { error: 'activeCode.code と userMessage と sessionId は必須です。' })
       }
 
-      const { reply, advance } = await askGemini({ activeCode, currentStep, history, userMessage })
+      const t0 = Date.now()
+      const { reply, advance, chatReadyMs, apiCallMs } = await askGemini({
+        sessionId,
+        activeCode,
+        currentStep,
+        userMessage,
+      })
+      const totalMs = Date.now() - t0
 
-      appendLog({ sessionId, eventType: 'chat', currentStep, userMessage, reply, advance })
+      appendLog({
+        sessionId,
+        eventType: 'chat',
+        currentStep,
+        userMessage,
+        reply,
+        advance,
+        totalMs,
+        chatReadyMs,
+        apiCallMs,
+      })
 
       return sendJson(res, 200, { reply, advance })
     }

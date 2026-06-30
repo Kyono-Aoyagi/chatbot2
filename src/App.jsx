@@ -157,7 +157,6 @@ function ChattingPhase({ activeCode, onChangeCode }) {
         sessionId,
         activeCode,
         currentStep: step,
-        messages: [...messages, userMessage],
         userMessage: text,
       })
 

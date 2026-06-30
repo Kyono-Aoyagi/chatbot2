@@ -40,7 +40,8 @@
 - `src/bot/geminiBot.js`
   - フロント側の Gemini 通信ラッパー。
   - 学習ステップ一覧、ステップラベル、次ステップ判定を持つ。
-  - `/api/chat` に `sessionId`, `activeCode`, `currentStep`, `history`, `userMessage` を送る。
+  - `/api/chat` に `sessionId`, `activeCode`, `currentStep`, `userMessage` を送る。
+  - 会話履歴(`history`)はクライアントからは送らない。サーバー側(`server/gemini.js`)が `sessionId` ごとに Gemini の `chat` インスタンスを保持しており、履歴はそちら側で管理される。
 
 - `src/utils/logger.js`
   - セッション ID 生成と `/api/log` へのログ送信。
@@ -65,14 +66,18 @@
 
 - `server/index.js`
   - Node 標準 `http` で作られた API サーバ。
-  - `POST /api/chat`: Gemini に問い合わせる。
+  - `POST /api/chat`: Gemini に問い合わせる。`sessionId`, `activeCode`, `currentStep`, `userMessage` は必須。
   - `POST /api/log`: ログを `logs/YYYY-MM-DD.jsonl` に追記する。
   - `OPTIONS` と CORS ヘッダーもここで処理する。
+  - `/api/chat` のログには `totalMs`（リクエスト全体の所要時間）、`chatReadyMs`（chatセッション準備時間）、`apiCallMs`（Gemini API呼び出し自体の時間）も記録される。レイテンシ原因の切り分けに使う。
 
 - `server/gemini.js`
   - Gemini API 呼び出し本体。
   - `GEMINI_API_KEY` を環境変数から読む。
-  - チューター用 system prompt を組み立てる。
+  - チューター用 system prompt（ルール文＋対象コード全文＋現在ステップの着目観点）を組み立てる。
+  - **`sessionId` ごとに Gemini の `chat` インスタンスをメモリ上の `Map`（`sessions`）に保持する。** 同じステップが続く間は `chat` を再利用し、`systemInstruction` の再構築・再送信を避ける。ステップが変わった場合のみ `chat` を作り直す（着目観点が変わるため）。
+  - そのため、会話履歴はクライアントから送られてくる `history` ではなく、Gemini SDK の `chat` オブジェクト内部で保持される。
+  - 注意: サーバープロセスを再起動すると `sessions` の内容（＝進行中の全会話履歴）は失われる。複数プロセス・サーバーレス環境ではこの仕組みは機能しない（`sessions` がプロセスごとに独立してしまうため）。
   - Gemini の返答から `{ reply, advance }` を取り出す。
 
 ### 設定
@@ -96,9 +101,9 @@
 ユーザー入力
   -> src/App.jsx
   -> src/bot/geminiBot.js
-  -> fetch('/api/chat')
+  -> fetch('/api/chat')  ※ sessionId, activeCode, currentStep, userMessage のみ（historyは送らない）
   -> server/index.js
-  -> server/gemini.js
+  -> server/gemini.js   ※ sessionIdごとにchatを保持・再利用
   -> Gemini API
   -> { reply, advance }
   -> React 側でメッセージ追加・ステップ更新
@@ -150,6 +155,7 @@ Vite フロントエンドだけを起動します。
 - API の仕様を変える場合は、フロント側の `fetch` と `server/index.js` の両方を確認する。
 - 教材コードを追加・変更する場合は `src/data/codeLibrary.js` を確認する。
 - 見た目だけの変更なら、基本的には `src/styles/global.css` と関連 JSX の className を確認する。
+- `server/gemini.js` の `sessions` Map（セッション保持の仕組み）を変更する場合は、サーバー再起動時の挙動・メモリリークの可能性・複数プロセス環境での非対応を踏まえること。
 
 ## 注意点
 
@@ -158,6 +164,7 @@ Vite フロントエンドだけを起動します。
 - `ruleBot.js` と `samplePython.js` は未使用の可能性があるため、削除や流用の前に import されていないか確認すること。
 - 日本語文字列が文字化けして見える場合がある。表示だけの問題か、ソース内容自体の問題かを確認してから修正すること。
 - `npm run build` は、サンドボックス制限で失敗することがある。その場合は権限付きで再実行が必要になる場合がある。
+- `server/gemini.js` の `sessions` Map にはセッションの自動破棄（タイムアウト）の仕組みがまだない。長時間運用するとメモリ使用量が増え続ける点に注意。
 
 ## よくある修正箇所
 
@@ -183,6 +190,9 @@ Vite フロントエンドだけを起動します。
 - ログの内容や保存形式を変えたい:
   - `src/utils/logger.js`
   - `server/index.js`
+
+- セッション保持の仕組み（chatの再利用・破棄）を変えたい:
+  - `server/gemini.js` の `sessions` Map と `getOrCreateChat()`
 
 ## 期待するエージェントの振る舞い
 

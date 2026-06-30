@@ -35,24 +35,14 @@ export function getInitialBotMessage(codeTitle) {
   }
 }
 
-export async function sendToGemini({ sessionId, activeCode, currentStep, messages, userMessage }) {
-  const allTurns = messages.filter(m => m.role === 'user' || m.role === 'bot')
-  const firstUserIndex = allTurns.findIndex(m => m.role === 'user')
-
-  const history = firstUserIndex === -1
-    ? []
-    : allTurns
-        .slice(firstUserIndex)
-        .slice(0, -1)
-        .map(m => ({
-          role: m.role === 'bot' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        }))
-
+// サーバー側でsessionIdごとにGeminiのchatセッション（履歴・systemInstruction）を
+// 保持するようになったため、ここではhistoryを組み立てずに
+// sessionId / activeCode / currentStep / userMessage だけを送る。
+export async function sendToGemini({ sessionId, activeCode, currentStep, userMessage }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, activeCode, currentStep, history, userMessage }),
+    body: JSON.stringify({ sessionId, activeCode, currentStep, userMessage }),
   })
 
   if (!response.ok) {

@@ -1,9 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY
-const MODEL_NAME = 'gemini-2.5-flash'
-
-const HISTORY_LIMIT = 10
+// const MODEL_NAME = 'gemini-2.5-flash'
+// const MODEL_NAME = 'gemini-3-flash-preview'
+// const MODEL_NAME = 'gemini-3.5-flash'
+const MODEL_NAME = 'gemini-3.1-flash-lite'
 
 const STEP_FOCUS = {
   purpose:      'コード全体が何をするものか、関数名や最後の数行を手がかりに自分の言葉で表現させる。',
@@ -69,20 +70,52 @@ ${hints}
 `.trim()
 }
 
-export async function askGemini({ activeCode, currentStep, history, userMessage }) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY が設定されていません。.env を確認してください。')
+// sessionId -> { chat, currentStep }
+// 同じステップの間はchatインスタンスを使い回す。
+// これによりsystemInstruction（ルール文＋コード全文）の再送信と
+// 履歴(history)のクライアントからの送信が不要になる。
+const sessions = new Map()
+
+function getOrCreateChat({ sessionId, activeCode, currentStep }) {
+  const existing = sessions.get(sessionId)
+  if (existing && existing.currentStep === currentStep) {
+    return existing.chat
   }
 
+  // 新規セッション、またはステップが変わった場合はchatを作り直す。
+  // ステップが変わるとTUTOR_RULES内の「着目観点」が変わるため、
+  // systemInstructionも更新が必要。
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
   const model = genAI.getGenerativeModel({
     model: MODEL_NAME,
     systemInstruction: buildSystemPrompt({ activeCode, currentStep }),
   })
+  const chat = model.startChat()
 
-  const trimmedHistory = history.slice(-(HISTORY_LIMIT * 2))
-  const chat = model.startChat({ history: trimmedHistory })
+  sessions.set(sessionId, { chat, currentStep })
+  return chat
+}
+
+export function clearSession(sessionId) {
+  sessions.delete(sessionId)
+}
+
+export async function askGemini({ sessionId, activeCode, currentStep, userMessage }) {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY が設定されていません。.env を確認してください。')
+  }
+  if (!sessionId) {
+    throw new Error('sessionId は必須です。')
+  }
+
+  const t0 = Date.now()
+  const chat = getOrCreateChat({ sessionId, activeCode, currentStep })
+  const chatReadyMs = Date.now() - t0
+
+  const apiT0 = Date.now()
   const result = await chat.sendMessage(userMessage)
+  const apiCallMs = Date.now() - apiT0
+
   const raw = result.response.text()
 
   // JSON部分だけ抽出してパース（AIがマークダウンで囲んだ場合も対応）
@@ -90,7 +123,7 @@ export async function askGemini({ activeCode, currentStep, history, userMessage 
   if (!jsonMatch) {
     // パース失敗時はadvance: falseで返答をそのまま使う
     console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
-    return { reply: raw.trim(), advance: false }
+    return { reply: raw.trim(), advance: false, chatReadyMs, apiCallMs }
   }
 
   try {
@@ -98,9 +131,11 @@ export async function askGemini({ activeCode, currentStep, history, userMessage 
     return {
       reply: String(parsed.reply ?? '').trim(),
       advance: parsed.advance === true,
+      chatReadyMs,
+      apiCallMs,
     }
   } catch (e) {
     console.warn('[gemini] JSONパース失敗:', e.message, 'raw:', raw)
-    return { reply: raw.trim(), advance: false }
+    return { reply: raw.trim(), advance: false, chatReadyMs, apiCallMs }
   }
 }
