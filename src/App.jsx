@@ -4,16 +4,80 @@ import { STEP_LABELS, getInitialBotMessage, sendToGemini } from './bot/geminiBot
 import { generateSessionId, logEvent } from './utils/logger'
 import './styles/global.css'
 
+const USER_CODES_STORAGE_KEY = 'code-reading-tutor.user-codes'
+const MAX_STORED_USER_CODES = 50
+const INDENT_COLUMNS = 4
+
+function loadStoredUserCodes() {
+  try {
+    const raw = window.localStorage.getItem(USER_CODES_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveStoredUserCodes(codes) {
+  window.localStorage.setItem(USER_CODES_STORAGE_KEY, JSON.stringify(codes))
+}
+
+function countIndentColumns(line) {
+  let columns = 0
+
+  for (const char of line) {
+    if (char === ' ') {
+      columns += 1
+    } else if (char === '\t') {
+      columns += INDENT_COLUMNS
+    } else {
+      break
+    }
+  }
+
+  return columns
+}
+
+function CodeBlock({ code }) {
+  const lines = code.split('\n')
+
+  return (
+    <div className="code-block">
+      {lines.map((line, index) => {
+        const indentLevel = Math.floor(countIndentColumns(line) / INDENT_COLUMNS)
+
+        return (
+          <div className="code-line" key={index}>
+            <span className="line-number">{index + 1}</span>
+            <span className="code-cell">
+              {Array.from({ length: indentLevel }, (_, guideIndex) => (
+                <span
+                  aria-hidden="true"
+                  className="indent-guide"
+                  key={guideIndex}
+                  style={{ '--guide-index': guideIndex }}
+                />
+              ))}
+              <code>{line || ' '}</code>
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ---- SelectionPhase ----
 
 function SelectionPhase({ onStart }) {
-  const [tab, setTab] = useState('preset') // 'preset' | 'paste'
+  const [tab, setTab] = useState('preset') // 'preset' | 'saved' | 'paste'
+  const [savedCodes, setSavedCodes] = useState(loadStoredUserCodes)
   const [pasteCode, setPasteCode] = useState('')
   const [pasteLanguage, setPasteLanguage] = useState('python')
   const [pasteTitle, setPasteTitle] = useState('')
   const [pasteError, setPasteError] = useState('')
 
-  const handlePresetSelect = (codeObj) => {
+  const handleSelect = (codeObj) => {
     onStart(codeObj)
   }
 
@@ -22,8 +86,19 @@ function SelectionPhase({ onStart }) {
       setPasteError('コードを貼り付けてください。')
       return
     }
+
+    const userCode = createUserCode({
+      code: pasteCode,
+      language: pasteLanguage,
+      title: pasteTitle,
+    })
+
     setPasteError('')
-    onStart(createUserCode({ code: pasteCode, language: pasteLanguage, title: pasteTitle }))
+    const nextSavedCodes = [userCode, ...savedCodes.filter(code => code.id !== userCode.id)]
+      .slice(0, MAX_STORED_USER_CODES)
+    saveStoredUserCodes(nextSavedCodes)
+    setSavedCodes(nextSavedCodes)
+    onStart(userCode)
   }
 
   return (
@@ -42,14 +117,21 @@ function SelectionPhase({ onStart }) {
             className={`tab-button ${tab === 'preset' ? 'tab-button--active' : ''}`}
             onClick={() => setTab('preset')}
           >
-            サンプルから選ぶ
+            サンプル
+          </button>
+          <button
+            type="button"
+            className={`tab-button ${tab === 'saved' ? 'tab-button--active' : ''}`}
+            onClick={() => setTab('saved')}
+          >
+            保存済み
           </button>
           <button
             type="button"
             className={`tab-button ${tab === 'paste' ? 'tab-button--active' : ''}`}
             onClick={() => setTab('paste')}
           >
-            コードを貼り付ける
+            コードを追加
           </button>
         </div>
 
@@ -60,10 +142,29 @@ function SelectionPhase({ onStart }) {
                 key={code.id}
                 type="button"
                 className="preset-card"
-                onClick={() => handlePresetSelect(code)}
+                onClick={() => handleSelect(code)}
               >
                 <span className="preset-card__title">{code.title}</span>
-                <span className="preset-card__meta">{code.language} · {code.filename}</span>
+                <span className="preset-card__meta">{code.language} / {code.filename}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === 'saved' && (
+          <div className="preset-list">
+            {savedCodes.length === 0 && (
+              <p className="empty-state">まだ保存されたコードはありません。</p>
+            )}
+            {savedCodes.map(code => (
+              <button
+                key={code.id}
+                type="button"
+                className="preset-card"
+                onClick={() => handleSelect(code)}
+              >
+                <span className="preset-card__title">{code.title}</span>
+                <span className="preset-card__meta">{code.language} / {code.filename}</span>
               </button>
             ))}
           </div>
@@ -77,7 +178,7 @@ function SelectionPhase({ onStart }) {
                 <input
                   type="text"
                   className="paste-form__input"
-                  placeholder="例：二分探索"
+                  placeholder="例: 二分探索"
                   value={pasteTitle}
                   onChange={e => setPasteTitle(e.target.value)}
                 />
@@ -191,23 +292,19 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
           <p>{activeCode.filename}</p>
         </div>
         <button type="button" className="secondary-button" onClick={onChangeCode}>
-          コードを変える
+          コードを変更
         </button>
       </header>
 
       <main className="main">
-        {/* コードペイン */}
         <section className="code-pane" aria-label="コード">
           <div className="pane-title">
             <span>{activeCode.filename}</span>
             <span>{activeCode.language}</span>
           </div>
-          <pre className="code-block">
-            <code>{activeCode.code}</code>
-          </pre>
+          <CodeBlock code={activeCode.code} />
         </section>
 
-        {/* チャットペイン */}
         <section className="chat-pane" aria-label="チャット">
           <div className="pane-title">
             <span>チャット</span>
@@ -230,12 +327,12 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
             {isLoading && (
               <article className="message message--bot">
                 <div className="message-label">AI</div>
-                <div className="message-body message-body--loading">考えています…</div>
+                <div className="message-body message-body--loading">考えています...</div>
               </article>
             )}
 
             {error && (
-              <p className="chat-error">⚠️ {error}</p>
+              <p className="chat-error">エラー: {error}</p>
             )}
 
             <div ref={messagesEndRef} />
@@ -264,7 +361,7 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
   )
 }
 
-// ---- App（フェーズ管理） ----
+// ---- App ----
 
 export default function App() {
   const [phase, setPhase] = useState('selecting') // 'selecting' | 'chatting'
@@ -272,9 +369,6 @@ export default function App() {
   const [sessionId, setSessionId] = useState(null)
 
   const handleStart = (codeObj) => {
-    // コードを選ぶ・貼り付けるたびに新しいセッションIDを発行する。
-    // （同じsessionIdを使い回すと、サーバー側のchatセッションが古いコードの
-    //   内容のまま再利用され、別のコードなのに前のコードの話を続けてしまう事故につながる）
     const newSessionId = generateSessionId()
     setSessionId(newSessionId)
     setActiveCode(codeObj)

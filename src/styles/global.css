@@ -168,6 +168,16 @@ select {
   color: var(--muted);
 }
 
+.empty-state {
+  margin: 0;
+  padding: 16px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
 .paste-form {
   display: flex;
   flex-direction: column;
@@ -269,6 +279,39 @@ select {
   font-family: var(--mono);
   font-size: 14px;
   line-height: 1.7;
+}
+
+.code-line {
+  display: grid;
+  grid-template-columns: 48px max-content;
+  min-width: max-content;
+}
+
+.line-number {
+  padding-right: 12px;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  opacity: 0.72;
+}
+
+.code-cell {
+  position: relative;
+  padding-left: 14px;
+}
+
+.indent-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(14px + var(--guide-index) * 4ch);
+  width: 1px;
+  background: rgba(102, 112, 133, 0.22);
+  pointer-events: none;
+}
+
+.code-cell code {
+  position: relative;
   white-space: pre;
 }
 
