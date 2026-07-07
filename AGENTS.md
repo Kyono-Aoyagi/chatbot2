@@ -34,7 +34,10 @@
 - `src/App.jsx`
   - UI と画面状態の中心。
   - コード選択画面 `SelectionPhase` とチャット画面 `ChattingPhase` を持つ。
-  - `phase`, `activeCode`, `messages`, `step`, `isLoading`, `error` などを管理する。
+  - `phase`, `activeCode`, `sessionId`, `messages`, `step`, `isLoading`, `error` などを管理する。
+  - `sessionId` は `handleStart()`（コードを選ぶ・貼り付けるたび）に新規発行され、`App` のstateで保持して `ChattingPhase` にpropで渡す。
+    （以前はモジュールスコープでアプリ起動時に1回だけ生成していたため、別のコードに切り替えても
+    同じsessionIdを使い回し、サーバー側のchatセッションが前のコードの内容のまま再利用される事故があった。修正済み）
   - ユーザー送信時に `sendToGemini()` を呼ぶ。
 
 - `src/bot/geminiBot.js`
@@ -49,7 +52,7 @@
 - `src/data/codeLibrary.js`
   - プリセット教材コードの定義。
   - ユーザー貼り付けコードを共通形式に変換する `createUserCode()` もここにある。
-  - `stepFocus`（任意）: ステップ単位で着目観点を上書きする仅組み。`{ [stepId]: string }` の形。
+  - `stepFocus`（任意）: ステップ単位で着目観点を上書きする仕組み。`{ [stepId]: string }` の形。
     未指定のステップは `server/gemini.js` の汎用 `STEP_FOCUS` にフォールバックする。
     ユーザー貼り付けコード（`stepFocus` なし）は常に汎用フォーカスのみを使う。
 
@@ -80,7 +83,8 @@
   - チューター用 system prompt（ルール文＋対象コード全文＋現在ステップの着目観点）を組み立てる。
   - `STEP_FOCUS` はコード構造に依存しない汎用な書き方にしてあり、`activeCode.stepFocus[step]` があればそちらを優先する（`buildSystemPrompt()`）。
   - 現在のステップの概念（ループ・分岐・状態変化・早期終了など）が対象コードに存在しない場合、AI は質問を無理に続けず `advance: true` でスキップしてよいと `TUTOR_RULES` に明記してある（ループのないコードや分岐のないコードなどへの対応）。
-  - **`sessionId` ごとに Gemini の `chat` インスタンスをメモリ上の `Map`（`sessions`）に保持する。** 同じステップが続く間は `chat` を再利用し、`systemInstruction` の再構築・再送信を避ける。ステップが変わった場合のみ `chat` を作り直す（着目観点が変わるため）。
+  - **`sessionId` ごとに Gemini の `chat` インスタンスをメモリ上の `Map`（`sessions`）に保持する。** 同じコード・同じステップが続く間は `chat` を再利用し、`systemInstruction` の再構築・再送信を避ける。ステップが変わった場合、または対象コード（`activeCode.id`）が変わった場合は `chat` を作り直す（`getOrCreateChat()`）。
+    - `activeCode.id` のチェックは、万一同一 `sessionId` で別のコードに切り替えられた場合でも、古いコードの内容で構築済みの `chat` が使い回されないようにする防御策。本来は `src/App.jsx` 側でコードごとに新規 `sessionId` を発行することで回避しているが、両方で二重に守っている。
   - そのため、会話履歴はクライアントから送られてくる `history` ではなく、Gemini SDK の `chat` オブジェクト内部で保持される。
   - 注意: サーバープロセスを再起動すると `sessions` の内容（＝進行中の全会話履歴）は失われる。複数プロセス・サーバーレス環境ではこの仕組みは機能しない（`sessions` がプロセスごとに独立してしまうため）。
   - Gemini の返答から `{ reply, advance }` を取り出す。
@@ -161,6 +165,7 @@ Vite フロントエンドだけを起動します。
 - 教材コードを追加・変更する場合は `src/data/codeLibrary.js` を確認する。
 - 見た目だけの変更なら、基本的には `src/styles/global.css` と関連 JSX の className を確認する。
 - `server/gemini.js` の `sessions` Map（セッション保持の仕組み）を変更する場合は、サーバー再起動時の挙動・メモリリークの可能性・複数プロセス環境での非対応を踏まえること。
+- `sessionId` の発行タイミング（`src/App.jsx` の `handleStart()`）は変えないこと。コードを切り替えるたびに新規発行する前提が崩れると、別のコードなのに前のコードの会話が続くバグが再発する。
 
 ## 注意点
 
@@ -170,6 +175,7 @@ Vite フロントエンドだけを起動します。
 - 日本語文字列が文字化けして見える場合がある。表示だけの問題か、ソース内容自体の問題かを確認してから修正すること。
 - `npm run build` は、サンドボックス制限で失敗することがある。その場合は権限付きで再実行が必要になる場合がある。
 - `server/gemini.js` の `sessions` Map にはセッションの自動破棄（タイムアウト）の仕組みがまだない。長時間運用するとメモリ使用量が増え続ける点に注意。
+- `sessionId` は必ずコードを選ぶ・貼り付けるたびに新規発行すること（`src/App.jsx` の `handleStart()`）。アプリ起動時に1回だけ生成する方式に戻すと、コードを切り替えた際に前のコードの会話を引き継ぐ事故が再発する（過去に実際に発生した不具合）。
 
 ## よくある修正箇所
 
@@ -198,6 +204,7 @@ Vite フロントエンドだけを起動します。
 
 - セッション保持の仕組み（chatの再利用・破棄）を変えたい:
   - `server/gemini.js` の `sessions` Map と `getOrCreateChat()`
+  - `src/App.jsx` の `sessionId` 発行タイミング（`handleStart()`）
 
 ## 期待するエージェントの振る舞い
 
