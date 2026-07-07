@@ -49,6 +49,9 @@
 - `src/data/codeLibrary.js`
   - プリセット教材コードの定義。
   - ユーザー貼り付けコードを共通形式に変換する `createUserCode()` もここにある。
+  - `stepFocus`（任意）: ステップ単位で着目観点を上書きする仅組み。`{ [stepId]: string }` の形。
+    未指定のステップは `server/gemini.js` の汎用 `STEP_FOCUS` にフォールバックする。
+    ユーザー貼り付けコード（`stepFocus` なし）は常に汎用フォーカスのみを使う。
 
 - `src/data/samplePython.js`
   - バブルソートのサンプルコード。
@@ -75,6 +78,8 @@
   - Gemini API 呼び出し本体。
   - `GEMINI_API_KEY` を環境変数から読む。
   - チューター用 system prompt（ルール文＋対象コード全文＋現在ステップの着目観点）を組み立てる。
+  - `STEP_FOCUS` はコード構造に依存しない汎用な書き方にしてあり、`activeCode.stepFocus[step]` があればそちらを優先する（`buildSystemPrompt()`）。
+  - 現在のステップの概念（ループ・分岐・状態変化・早期終了など）が対象コードに存在しない場合、AI は質問を無理に続けず `advance: true` でスキップしてよいと `TUTOR_RULES` に明記してある（ループのないコードや分岐のないコードなどへの対応）。
   - **`sessionId` ごとに Gemini の `chat` インスタンスをメモリ上の `Map`（`sessions`）に保持する。** 同じステップが続く間は `chat` を再利用し、`systemInstruction` の再構築・再送信を避ける。ステップが変わった場合のみ `chat` を作り直す（着目観点が変わるため）。
   - そのため、会話履歴はクライアントから送られてくる `history` ではなく、Gemini SDK の `chat` オブジェクト内部で保持される。
   - 注意: サーバープロセスを再起動すると `sessions` の内容（＝進行中の全会話履歴）は失われる。複数プロセス・サーバーレス環境ではこの仕組みは機能しない（`sessions` がプロセスごとに独立してしまうため）。

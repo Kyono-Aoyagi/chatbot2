@@ -9,6 +9,11 @@
  *   source:      string   — 'preset' | 'user_input'
  *   code:        string   — コード本文
  *   tutorHints:  string|null — AIへの補足指示（なければAIが自力で読む）
+ *   stepFocus:   object|undefined — ステップ単位の着目観点の上書き（任意）
+ *                { [stepId]: string } の形。指定したステップだけ、
+ *                server側の汎用STEP_FOCUSより優先して使われる。
+ *                未指定のステップは汎用のデフォルトにフォールバックする。
+ *                （例: ループの変数名や状態変数名など、コード固有の具体的な観点を書く）
  * }
  */
 
@@ -40,6 +45,15 @@ print(sorted_values)`,
 - swapped 変数による早期終了（最適化）がこのコードの核心なので、最終的にここに気づかせたい
 - numbers[j] と numbers[j+1] の交換が「隣同士の比較と入れ替え」であることを自分の言葉で言わせる
 `.trim(),
+    // このコード固有の具体的な観点（変数名など）は stepFocus で上書きする。
+    // 未指定のステップ（purpose, input_output, summaryなど）は
+    // server/gemini.js の汎用 STEP_FOCUS にフォールバックされる。
+    stepFocus: {
+      loop: '二重ループの外側（i）と内側（j）がそれぞれ何をしているか、役割の違いに注目させる。',
+      state_change: 'swapped 変数がいつTrueになるか、何を記録している変数なのかを考えさせる。',
+      early_stop: 'swapped による早期終了（最適化）がなぜ可能なのか、その理由を考えさせる。',
+      condition: 'numbers[j] と numbers[j+1] の比較がどんなときに真になり、そのとき配列に何が起きるかを考えさせる。',
+    },
   },
 ]
 

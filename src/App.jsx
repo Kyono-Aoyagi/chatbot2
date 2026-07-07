@@ -4,9 +4,6 @@ import { STEP_LABELS, getInitialBotMessage, sendToGemini } from './bot/geminiBot
 import { generateSessionId, logEvent } from './utils/logger'
 import './styles/global.css'
 
-// セッションIDはアプリ起動時に1度だけ生成
-const sessionId = generateSessionId()
-
 // ---- SelectionPhase ----
 
 function SelectionPhase({ onStart }) {
@@ -124,7 +121,7 @@ function SelectionPhase({ onStart }) {
 
 // ---- ChattingPhase ----
 
-function ChattingPhase({ activeCode, onChangeCode }) {
+function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
   const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title)])
   const [input, setInput] = useState('')
   const [step, setStep] = useState('purpose')
@@ -272,21 +269,28 @@ function ChattingPhase({ activeCode, onChangeCode }) {
 export default function App() {
   const [phase, setPhase] = useState('selecting') // 'selecting' | 'chatting'
   const [activeCode, setActiveCode] = useState(null)
+  const [sessionId, setSessionId] = useState(null)
 
   const handleStart = (codeObj) => {
+    // コードを選ぶ・貼り付けるたびに新しいセッションIDを発行する。
+    // （同じsessionIdを使い回すと、サーバー側のchatセッションが古いコードの
+    //   内容のまま再利用され、別のコードなのに前のコードの話を続けてしまう事故につながる）
+    const newSessionId = generateSessionId()
+    setSessionId(newSessionId)
     setActiveCode(codeObj)
     setPhase('chatting')
-    logEvent({ sessionId, eventType: 'session_start', codeId: codeObj.id, source: codeObj.source })
+    logEvent({ sessionId: newSessionId, eventType: 'session_start', codeId: codeObj.id, source: codeObj.source })
   }
 
   const handleChangeCode = () => {
     setPhase('selecting')
     setActiveCode(null)
+    setSessionId(null)
   }
 
   if (phase === 'selecting') {
     return <SelectionPhase onStart={handleStart} />
   }
 
-  return <ChattingPhase activeCode={activeCode} onChangeCode={handleChangeCode} />
+  return <ChattingPhase activeCode={activeCode} sessionId={sessionId} onChangeCode={handleChangeCode} />
 }
