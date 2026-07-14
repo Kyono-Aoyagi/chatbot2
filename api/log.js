@@ -1,4 +1,3 @@
-import { isAccessCodeValid } from './_lib/accessCode.js'
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -13,12 +12,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { accessCode, ...event } = req.body ?? {}
-
-    if (!isAccessCodeValid(accessCode)) {
-      return res.status(401).json({ error: '合言葉が正しくありません。' })
-    }
-
+    const event = req.body ?? {}
     const entry = { timestamp: new Date().toISOString(), ...event }
 
     // NOTE: サーバーレス環境なのでファイルには書き込まない（再起動で消えるため）。

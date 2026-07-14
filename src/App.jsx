@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
 import { STEP_LABELS, getInitialBotMessage, sendToGemini } from './bot/geminiBot'
 import { generateSessionId, logEvent } from './utils/logger'
-import { getStoredAccessCode, setStoredAccessCode, verifyAccessCode } from './utils/accessCode'
 import './styles/global.css'
 
 const USER_CODES_STORAGE_KEY = 'code-reading-tutor.user-codes'
@@ -64,65 +63,6 @@ function CodeBlock({ code }) {
           </div>
         )
       })}
-    </div>
-  )
-}
-
-// ---- AccessGate ----
-
-function AccessGate({ onPass }) {
-  const [code, setCode] = useState('')
-  const [error, setError] = useState('')
-  const [isChecking, setIsChecking] = useState(false)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!code.trim() || isChecking) return
-
-    setIsChecking(true)
-    setError('')
-
-    try {
-      const ok = await verifyAccessCode(code.trim())
-      if (ok) {
-        setStoredAccessCode(code.trim())
-        onPass()
-      } else {
-        setError('合言葉が正しくありません。')
-      }
-    } catch {
-      setError('確認中にエラーが発生しました。時間をおいて再度お試しください。')
-    } finally {
-      setIsChecking(false)
-    }
-  }
-
-  return (
-    <div className="app">
-      <header className="header">
-        <div>
-          <h1>コードリーディング練習</h1>
-          <p>合言葉を入力してください</p>
-        </div>
-      </header>
-      <main className="selection-main">
-        <form className="paste-form" onSubmit={handleSubmit}>
-          <label className="paste-form__label">
-            合言葉
-            <input
-              type="password"
-              className="paste-form__input"
-              value={code}
-              onChange={e => { setCode(e.target.value); setError('') }}
-              autoFocus
-            />
-          </label>
-          {error && <p className="paste-form__error">{error}</p>}
-          <button type="submit" className="primary-button" disabled={!code.trim() || isChecking}>
-            {isChecking ? '確認中...' : '入室する'}
-          </button>
-        </form>
-      </main>
     </div>
   )
 }
@@ -428,22 +368,9 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
 // ---- App ----
 
 export default function App() {
-  const [phase, setPhase] = useState('checking') // 'checking' | 'gate' | 'selecting' | 'chatting'
+  const [phase, setPhase] = useState('selecting') // 'selecting' | 'chatting'
   const [activeCode, setActiveCode] = useState(null)
   const [sessionId, setSessionId] = useState(null)
-
-  // 起動時に、以前保存した合言葉がまだ有効かをサーバーに確認し、
-  // 有効ならゲートをスキップする。未保存・無効ならゲートを表示。
-  useEffect(() => {
-    const stored = getStoredAccessCode()
-    if (!stored) {
-      setPhase('gate')
-      return
-    }
-    verifyAccessCode(stored).then(ok => {
-      setPhase(ok ? 'selecting' : 'gate')
-    })
-  }, [])
 
   const handleStart = (codeObj) => {
     const newSessionId = generateSessionId()
@@ -457,14 +384,6 @@ export default function App() {
     setPhase('selecting')
     setActiveCode(null)
     setSessionId(null)
-  }
-
-  if (phase === 'checking') {
-    return <div className="app" />
-  }
-
-  if (phase === 'gate') {
-    return <AccessGate onPass={() => setPhase('selecting')} />
   }
 
   if (phase === 'selecting') {

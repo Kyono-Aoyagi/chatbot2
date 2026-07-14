@@ -1,5 +1,4 @@
 import { askGemini } from './_lib/gemini.js'
-import { isAccessCodeValid } from './_lib/accessCode.js'
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -15,11 +14,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { activeCode, currentStep, userMessage, history, accessCode } = req.body ?? {}
-
-    if (!isAccessCodeValid(accessCode)) {
-      return res.status(401).json({ error: '合言葉が正しくありません。' })
-    }
+    const { activeCode, currentStep, userMessage, history } = req.body ?? {}
 
     if (!activeCode?.code || !userMessage) {
       return res.status(400).json({ error: 'activeCode.code と userMessage は必須です。' })
