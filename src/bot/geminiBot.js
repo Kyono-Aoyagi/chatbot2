@@ -1,3 +1,5 @@
+import { getStoredAccessCode } from '../utils/accessCode'
+
 const API_BASE = '/api'
 
 export const STEPS = [
@@ -42,7 +44,7 @@ export async function sendToGemini({ activeCode, currentStep, userMessage, histo
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ activeCode, currentStep, userMessage, history }),
+    body: JSON.stringify({ activeCode, currentStep, userMessage, history, accessCode: getStoredAccessCode() }),
   })
 
   if (!response.ok) {
