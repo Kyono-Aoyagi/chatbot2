@@ -251,11 +251,15 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
     setError('')
 
     try {
+      // API送信用に、直前までの会話履歴を role/content の配列に変換する
+      // （今回のuserMessageは含めない。userMessage引数として別送信するため）
+      const history = messages.map(m => ({ role: m.role, content: m.content }))
+
       const botReply = await sendToGemini({
-        sessionId,
         activeCode,
         currentStep: step,
         userMessage: text,
+        history,
       })
 
       const botMessage = {

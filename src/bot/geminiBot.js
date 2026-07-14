@@ -35,14 +35,14 @@ export function getInitialBotMessage(codeTitle) {
   }
 }
 
-// サーバー側でsessionIdごとにGeminiのchatセッション（履歴・systemInstruction）を
-// 保持するようになったため、ここではhistoryを組み立てずに
-// sessionId / activeCode / currentStep / userMessage だけを送る。
-export async function sendToGemini({ sessionId, activeCode, currentStep, userMessage }) {
+// サーバーレス関数はリクエスト間で状態を共有できないため、会話履歴(history)は
+// クライアント側(messages state)で保持し、毎回のリクエストに含めて送る。
+// history は [{role:'user'|'bot', content:string}, ...] の形（今回送るuserMessage自体は含めない）。
+export async function sendToGemini({ activeCode, currentStep, userMessage, history }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, activeCode, currentStep, userMessage }),
+    body: JSON.stringify({ activeCode, currentStep, userMessage, history }),
   })
 
   if (!response.ok) {
