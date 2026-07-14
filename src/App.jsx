@@ -256,6 +256,7 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
       const history = messages.map(m => ({ role: m.role, content: m.content }))
 
       const botReply = await sendToGemini({
+        sessionId,
         activeCode,
         currentStep: step,
         userMessage: text,

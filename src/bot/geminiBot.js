@@ -38,11 +38,11 @@ export function getInitialBotMessage(codeTitle) {
 // サーバーレス関数はリクエスト間で状態を共有できないため、会話履歴(history)は
 // クライアント側(messages state)で保持し、毎回のリクエストに含めて送る。
 // history は [{role:'user'|'bot', content:string}, ...] の形（今回送るuserMessage自体は含めない）。
-export async function sendToGemini({ activeCode, currentStep, userMessage, history }) {
+export async function sendToGemini({ sessionId, activeCode, currentStep, userMessage, history }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ activeCode, currentStep, userMessage, history }),
+    body: JSON.stringify({ sessionId, activeCode, currentStep, userMessage, history }),
   })
 
   if (!response.ok) {

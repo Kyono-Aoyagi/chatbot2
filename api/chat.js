@@ -1,4 +1,5 @@
 import { askGemini } from './_lib/gemini.js'
+import { insertLog } from './_lib/supabase.js'
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -14,7 +15,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { activeCode, currentStep, userMessage, history } = req.body ?? {}
+    const { activeCode, currentStep, userMessage, history, sessionId } = req.body ?? {}
 
     if (!activeCode?.code || !userMessage) {
       return res.status(400).json({ error: 'activeCode.code と userMessage は必須です。' })
@@ -29,9 +30,9 @@ export default async function handler(req, res) {
     })
     const totalMs = Date.now() - t0
 
-    // 簡易ログ（Vercelの Logs タブで確認可能。永続保存が必要になったら
-    // ここを外部ストレージ（Supabase等）への書き込みに差し替える）
-    console.log(JSON.stringify({
+    // チャットの往復をSupabaseに保存（本番ではVercel Logsではなくこちらを一次ソースにする）
+    await insertLog({
+      sessionId,
       eventType: 'chat',
       currentStep,
       userMessage,
@@ -40,7 +41,7 @@ export default async function handler(req, res) {
       totalMs,
       chatReadyMs,
       apiCallMs,
-    }))
+    })
 
     return res.status(200).json({ reply, advance })
   } catch (error) {

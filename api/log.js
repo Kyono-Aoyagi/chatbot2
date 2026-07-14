@@ -1,3 +1,5 @@
+import { insertLog } from './_lib/supabase.js'
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -13,13 +15,7 @@ export default async function handler(req, res) {
 
   try {
     const event = req.body ?? {}
-    const entry = { timestamp: new Date().toISOString(), ...event }
-
-    // NOTE: サーバーレス環境なのでファイルには書き込まない（再起動で消えるため）。
-    // 今はVercelのLogsタブで確認できるだけ。分析・永続化が必要になったら
-    // ここをSupabase等の外部ストレージへの書き込みに差し替える。
-    console.log(JSON.stringify(entry))
-
+    await insertLog(event)
     return res.status(200).json({ ok: true })
   } catch (error) {
     console.error('[api/log error]', error)
