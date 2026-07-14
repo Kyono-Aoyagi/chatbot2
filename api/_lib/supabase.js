@@ -1,7 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = process.env.SUPABASE_URL
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+let SUPABASE_URL = (process.env.SUPABASE_URL ?? '').trim()
+if (SUPABASE_URL) {
+  // 末尾のスラッシュや、誤って含まれた /rest/v1 などのパスを除去する
+  SUPABASE_URL = SUPABASE_URL.replace(/\/+$/, '').replace(/\/rest\/v1$/, '')
+}
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim()
 
 // service_role キーはRLSを無視してテーブルにフルアクセスできるため、
 // 絶対にフロントエンドのコードやレスポンスに含めないこと。サーバー側専用。
