@@ -83,7 +83,20 @@ ${hints}
 // 受け取り、chatインスタンスもリクエストごとに作り直す（＝ステートレス）。
 function toGeminiHistory(history) {
   if (!Array.isArray(history)) return []
-  return history.map(m => ({
+
+  // Gemini API の履歴は最初のメッセージが 'user' でなければならないため、
+  // 最初の 'user' のメッセージが現れるインデックスを探します。
+  const firstUserIdx = history.findIndex(m => m.role === 'user')
+
+  // もし 'user' のメッセージが履歴に含まれない場合は、空の履歴（最初のターン）として扱います。
+  if (firstUserIdx === -1) {
+    return []
+  }
+
+  // 最初の 'user' メッセージ以降の履歴のみを対象とします。
+  const slicedHistory = history.slice(firstUserIdx)
+
+  return slicedHistory.map(m => ({
     role: m.role === 'user' ? 'user' : 'model',
     parts: [{ text: String(m.content ?? '') }],
   }))
