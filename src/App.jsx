@@ -310,7 +310,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       role: 'user',
       content: text,
       step,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
     }
 
     setMessages(prev => [...prev, userMessage])
@@ -336,7 +336,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         role: 'bot',
         content: botReply.content,
         step: botReply.nextStep,
-        timestamp: new Date().toISOString(),
+        timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
       }
 
       setMessages(prev => [...prev, botMessage])
