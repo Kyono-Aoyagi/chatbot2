@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { activeCode, currentStep, userMessage, history, sessionId } = req.body ?? {}
+    const { activeCode, currentStep, userMessage, history, sessionId, condition } = req.body ?? {}
 
     if (!activeCode?.code || !userMessage) {
       return res.status(400).json({ error: 'activeCode.code と userMessage は必須です。' })
@@ -27,6 +27,7 @@ export default async function handler(req, res) {
       currentStep,
       userMessage,
       history,
+      condition,
     })
     const totalMs = Date.now() - t0
 
@@ -34,6 +35,7 @@ export default async function handler(req, res) {
     await insertLog({
       sessionId,
       eventType: 'chat',
+      condition,
       currentStep,
       userMessage,
       reply,

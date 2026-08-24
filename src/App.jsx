@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
 import { STEP_LABELS, getInitialBotMessage, sendToGemini } from './bot/geminiBot'
 import { generateSessionId, logEvent } from './utils/logger'
+import { resolveCondition, CONDITION_LABELS } from './utils/condition'
 import './styles/global.css'
 
 const USER_CODES_STORAGE_KEY = 'code-reading-tutor.user-codes'
@@ -222,10 +223,10 @@ function SelectionPhase({ onStart }) {
 
 // ---- ChattingPhase ----
 
-function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
-  const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title)])
+function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
+  const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title, condition)])
   const [input, setInput] = useState('')
-  const [step, setStep] = useState('purpose')
+  const [step, setStep] = useState(condition === 'free' ? 'free' : 'purpose')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const messagesEndRef = useRef(null)
@@ -261,6 +262,7 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
         currentStep: step,
         userMessage: text,
         history,
+        condition,
       })
 
       const botMessage = {
@@ -294,7 +296,7 @@ function ChattingPhase({ activeCode, sessionId, onChangeCode }) {
       <header className="header">
         <div>
           <h1>{activeCode.title}</h1>
-          <p>{activeCode.filename}</p>
+          <p>{activeCode.filename} ・ {CONDITION_LABELS[condition] ?? condition}</p>
         </div>
         <button type="button" className="secondary-button" onClick={onChangeCode}>
           コードを変更
@@ -372,13 +374,21 @@ export default function App() {
   const [phase, setPhase] = useState('selecting') // 'selecting' | 'chatting'
   const [activeCode, setActiveCode] = useState(null)
   const [sessionId, setSessionId] = useState(null)
+  // セッション中は条件が変わらないようにマウント時に1回だけ解決する
+  const [condition] = useState(resolveCondition)
 
   const handleStart = (codeObj) => {
     const newSessionId = generateSessionId()
     setSessionId(newSessionId)
     setActiveCode(codeObj)
     setPhase('chatting')
-    logEvent({ sessionId: newSessionId, eventType: 'session_start', codeId: codeObj.id, source: codeObj.source })
+    logEvent({
+      sessionId: newSessionId,
+      eventType: 'session_start',
+      codeId: codeObj.id,
+      source: codeObj.source,
+      condition,
+    })
   }
 
   const handleChangeCode = () => {
@@ -391,5 +401,12 @@ export default function App() {
     return <SelectionPhase onStart={handleStart} />
   }
 
-  return <ChattingPhase activeCode={activeCode} sessionId={sessionId} onChangeCode={handleChangeCode} />
+  return (
+    <ChattingPhase
+      activeCode={activeCode}
+      sessionId={sessionId}
+      condition={condition}
+      onChangeCode={handleChangeCode}
+    />
+  )
 }

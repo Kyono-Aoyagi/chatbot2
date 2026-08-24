@@ -54,7 +54,50 @@ const TUTOR_RULES = `
 {"reply":"ここに返答テキスト","advance":false}
 `.trim()
 
-function buildSystemPrompt({ activeCode, currentStep }) {
+// 対照群（free条件）用のルール。
+// 比較実験の交絡変数を減らすため、guided条件と次の2点を揃えてある。
+// 1) 扱う話題の範囲（目的・入出力・ループ・条件分岐・状態変化・終了条件・まとめ）をSTEP_FOCUSと同じにする
+// 2) 1回の返答の長さ上限（8文）を揃える
+// 違うのは「自分で考えさせるか、直接説明するか」という介入方法の部分だけ。
+const TUTOR_RULES_FREE = `
+あなたはコードリーディングを支援するAIチューターです。この条件では、ユーザーの質問に対して遠慮せず直接わかりやすく説明します。
+
+## 対応方針
+- ユーザーの質問には直接的に、わかりやすく答える（ヒントだけに留めず、必要なら答えそのものを説明してよい）
+- 説明はコードの該当箇所（変数名・行の内容）に具体的に触れながら行う
+- 「わからない」と言われたら、遠慮なく丁寧に解説する
+- 質問があいまいなときは、簡潔に確認してよい
+- 返答は最大で8文以内に収める
+- 日本語で返答する
+
+## 扱ってよい話題の範囲（このコードについてのみ、以下はguided条件と揃えてある）
+- 全体の目的（何を受け取り、何をするものか）
+- 入力と出力
+- 繰り返し処理（ある場合）
+- 条件分岐（ある場合）
+- 値・状態の変化
+- 処理の終了条件（ある場合）
+- 全体のまとめ
+上記に無関係な話題（このコードと関係のない一般的なプログラミング相談など）には簡潔に断り、このコードの話題に戻す。
+
+## 返答形式（厳守）
+必ず以下のJSON形式だけで返答すること。前後に説明文やマークダウンを付けない。
+{"reply":"ここに返答テキスト"}
+`.trim()
+
+function buildSystemPrompt({ activeCode, currentStep, condition }) {
+  if (condition === 'free') {
+    return `
+${TUTOR_RULES_FREE}
+
+## 対象コード（${activeCode.filename ?? 'code'}）
+言語: ${activeCode.language ?? '不明'}
+\`\`\`
+${activeCode.code}
+\`\`\`
+`.trim()
+  }
+
   const focus = activeCode.stepFocus?.[currentStep] ?? STEP_FOCUS[currentStep] ?? STEP_FOCUS.summary
   const hints = activeCode.tutorHints
     ? `## このコードで特に注目させたいポイント\n${activeCode.tutorHints}`
@@ -102,7 +145,7 @@ function toGeminiHistory(history) {
   }))
 }
 
-export async function askGemini({ activeCode, currentStep, userMessage, history }) {
+export async function askGemini({ activeCode, currentStep, userMessage, history, condition }) {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。環境変数を確認してください。')
   }
@@ -111,7 +154,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history 
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
   const model = genAI.getGenerativeModel({
     model: MODEL_NAME,
-    systemInstruction: buildSystemPrompt({ activeCode, currentStep }),
+    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition }),
   })
   const chat = model.startChat({ history: toGeminiHistory(history) })
   const chatReadyMs = Date.now() - t0
@@ -122,7 +165,8 @@ export async function askGemini({ activeCode, currentStep, userMessage, history 
 
   const raw = result.response.text()
 
-  const jsonMatch = raw.match(/\{[\s\S]*"reply"[\s\S]*"advance"[\s\S]*\}/)
+  // free条件は {"reply":...} のみを返すため、"advance" の有無に依存しない形で抽出する。
+  const jsonMatch = raw.match(/\{[\s\S]*"reply"[\s\S]*\}/)
   if (!jsonMatch) {
     console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
     return { reply: raw.trim(), advance: false, chatReadyMs, apiCallMs }
@@ -130,9 +174,11 @@ export async function askGemini({ activeCode, currentStep, userMessage, history 
 
   try {
     const parsed = JSON.parse(jsonMatch[0])
+    // free条件にはadvanceの概念が無いのでtrue固定としておく（フロント側では使用しない）。
+    const advance = condition === 'free' ? true : parsed.advance === true
     return {
       reply: String(parsed.reply ?? '').trim(),
-      advance: parsed.advance === true,
+      advance,
       chatReadyMs,
       apiCallMs,
     }
