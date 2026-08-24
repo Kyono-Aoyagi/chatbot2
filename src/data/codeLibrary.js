@@ -9,6 +9,8 @@
  *   source:      string   — 'preset' | 'user_input'
  *   code:        string   — コード本文
  *   tutorHints:  string|null — AIへの補足指示（なければAIが自力で読む）
+ *   expectedOutput: string|undefined — 事前に実行しておいた実行結果（標準出力）。
+ *                    指定があるプリセットのみ、summaryステップ完了後に実行結果パネルで表示する。
  *   stepFocus:   object|undefined — ステップ単位の着目観点の上書き（任意）
  *                { [stepId]: string } の形。指定したステップだけ、
  *                server側の汎用STEP_FOCUSより優先して使われる。
@@ -40,6 +42,9 @@ export const PRESET_CODES = [
 values = [64, 34, 25, 12, 22, 11, 90]
 sorted_values = bubble_sort(values)
 print(sorted_values)`,
+    // 事前に手元で実行しておいた結果をそのまま貼っている（静的埋め込み）。
+    // summaryステップ完了後にのみ実行結果パネルに表示される。
+    expectedOutput: '[11, 12, 22, 25, 34, 64, 90]',
     tutorHints: `
 - 二重ループの外側（i）と内側（j）が別の役割を持っていることに気づかせる
 - swapped 変数による早期終了（最適化）がこのコードの核心なので、最終的にここに気づかせたい

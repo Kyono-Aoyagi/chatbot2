@@ -68,6 +68,45 @@ function CodeBlock({ code }) {
   )
 }
 
+// ---- ドラッグで幅/高さを調整するリサイザー ----
+// direction: 'horizontal'（左右の幅を調整、containerRefの横幅に対する比率で計算）
+//            'vertical'（上下の高さを調整、containerRefの縦幅に対する比率で計算）
+function Resizer({ direction, containerRef, ratio, setRatio, min = 0.2, max = 0.8 }) {
+  const handlePointerDown = (e) => {
+    e.preventDefault()
+
+    const handleMove = (moveEvent) => {
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      let next
+      if (direction === 'horizontal') {
+        next = (moveEvent.clientX - rect.left) / rect.width
+      } else {
+        next = (moveEvent.clientY - rect.top) / rect.height
+      }
+      setRatio(Math.min(max, Math.max(min, next)))
+    }
+
+    const handleUp = () => {
+      document.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseup', handleUp)
+    }
+
+    document.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseup', handleUp)
+  }
+
+  return (
+    <div
+      className={direction === 'horizontal' ? 'resizer resizer--h' : 'resizer resizer--v'}
+      onMouseDown={handlePointerDown}
+      role="separator"
+      aria-orientation={direction === 'horizontal' ? 'vertical' : 'horizontal'}
+    />
+  )
+}
+
 // ---- SelectionPhase ----
 
 function SelectionPhase({ onStart }) {
@@ -223,13 +262,41 @@ function SelectionPhase({ onStart }) {
 
 // ---- ChattingPhase ----
 
+function ResultPanel({ expectedOutput, unlocked }) {
+  if (!expectedOutput) return null
+
+  return (
+    <section className="result-panel" aria-label="実行結果">
+      <div className="pane-title">
+        <span>実行結果</span>
+      </div>
+      {unlocked ? (
+        <pre className="result-panel__output">{expectedOutput}</pre>
+      ) : (
+        <div className="result-panel__locked">
+          「まとめ」ステップを完了すると、ここに実行結果が表示されます。
+        </div>
+      )}
+    </section>
+  )
+}
+
 function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
   const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title, condition)])
   const [input, setInput] = useState('')
   const [step, setStep] = useState(condition === 'free' ? 'free' : 'purpose')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  // free条件は自己説明を強制する設計ではないので最初から解除。
+  // guided条件は summaryステップがadvance:trueになった瞬間に解除する。
+  const [resultUnlocked, setResultUnlocked] = useState(condition === 'free')
   const messagesEndRef = useRef(null)
+
+  // レイアウト調整用
+  const mainRef = useRef(null)
+  const codePaneRef = useRef(null)
+  const [paneRatio, setPaneRatio] = useState(0.6) // 左（コード）の幅の比率
+  const [codeRatio, setCodeRatio] = useState(0.7) // コード部分（実行結果を除く）の高さの比率
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -273,6 +340,14 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       }
 
       setMessages(prev => [...prev, botMessage])
+
+      // summaryステップがadvance:trueになった瞬間だけ実行結果を解除する
+      // （summaryはSTEPSの最後なので nextStep だけでは advance の有無を区別できない）
+      if (!resultUnlocked && step === 'summary' && botReply.advance) {
+        setResultUnlocked(true)
+        logEvent({ sessionId, eventType: 'result_shown', step })
+      }
+
       setStep(botReply.nextStep)
 
       logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep })
@@ -303,14 +378,43 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         </button>
       </header>
 
-      <main className="main">
-        <section className="code-pane" aria-label="コード">
-          <div className="pane-title">
-            <span>{activeCode.filename}</span>
-            <span>{activeCode.language}</span>
+      <main className="main" ref={mainRef}>
+        <section
+          className="code-pane"
+          aria-label="コード"
+          ref={codePaneRef}
+          style={{ flexBasis: `${paneRatio * 100}%` }}
+        >
+          <div
+            className="code-pane__code-area"
+            style={activeCode.expectedOutput ? { flexBasis: `${codeRatio * 100}%` } : { flex: 1 }}
+          >
+            <div className="pane-title">
+              <span>{activeCode.filename}</span>
+              <span>{activeCode.language}</span>
+            </div>
+            <CodeBlock code={activeCode.code} />
           </div>
-          <CodeBlock code={activeCode.code} />
+
+          {activeCode.expectedOutput && (
+            <>
+              <Resizer
+                direction="vertical"
+                containerRef={codePaneRef}
+                ratio={codeRatio}
+                setRatio={setCodeRatio}
+              />
+              <ResultPanel expectedOutput={activeCode.expectedOutput} unlocked={resultUnlocked} />
+            </>
+          )}
         </section>
+
+        <Resizer
+          direction="horizontal"
+          containerRef={mainRef}
+          ratio={paneRatio}
+          setRatio={setPaneRatio}
+        />
 
         <section className="chat-pane" aria-label="チャット">
           <div className="pane-title">

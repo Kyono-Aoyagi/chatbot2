@@ -239,9 +239,8 @@ select {
 /* ---- チャット画面 ---- */
 
 .main {
-  display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(340px, 420px);
-  gap: 12px;
+  display: flex;
+  gap: 0;
   min-height: 0;
   flex: 1;
   padding: 12px;
@@ -251,12 +250,111 @@ select {
 .chat-pane {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 200px;
   min-height: 0;
   overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.chat-pane {
+  flex: 1;
+  min-width: 260px;
+}
+
+.code-pane {
+  flex-shrink: 0;
+}
+
+.code-pane__code-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 60px;
+  overflow: hidden;
+}
+
+/* ---- リサイザー ---- */
+
+.resizer {
+  flex-shrink: 0;
+  background: transparent;
+  position: relative;
+  z-index: 1;
+}
+
+.resizer::after {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.resizer:hover::after,
+.resizer:active::after {
+  background: var(--accent);
+}
+
+.resizer--h {
+  width: 12px;
+  margin: 0 -6px;
+  cursor: col-resize;
+}
+
+.resizer--h::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 3px;
+  transform: translateX(-50%);
+}
+
+.resizer--v {
+  height: 12px;
+  margin: -6px 0;
+  cursor: row-resize;
+}
+
+.resizer--v::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+}
+
+/* ---- 実行結果パネル ---- */
+
+.result-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 48px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
+.result-panel__output {
+  flex: 1;
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.7;
+  background: var(--panel-muted);
+  white-space: pre-wrap;
+}
+
+.result-panel__locked {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  background: var(--panel-muted);
 }
 
 .pane-title {
@@ -429,7 +527,21 @@ select {
 
 @media (max-width: 820px) {
   .main {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(260px, 1fr) minmax(320px, 1fr);
+    flex-direction: column;
+  }
+
+  .code-pane,
+  .chat-pane {
+    flex-basis: auto !important;
+    width: 100% !important;
+    min-height: 260px;
+  }
+
+  .code-pane__code-area {
+    flex-basis: auto !important;
+  }
+
+  .resizer--h {
+    display: none;
   }
 }

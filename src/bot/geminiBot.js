@@ -71,5 +71,8 @@ export async function sendToGemini({ sessionId, activeCode, currentStep, userMes
   return {
     content: data.reply,
     nextStep,
+    // 呼び出し側で「summary完了の瞬間」を検知するために必要
+    // （currentStepがすでに最後のステップの場合、nextStepだけではadvanceの有無を区別できないため）
+    advance: data.advance === true,
   }
 }
