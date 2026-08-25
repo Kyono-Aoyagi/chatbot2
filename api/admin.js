@@ -27,7 +27,22 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
 }
 
-function renderPage({ rows, eventType, sessionId, limit, configured }) {
+// row.payload.condition ('guided' | 'free') を人間向けラベル・バッジに変換する。
+// session_start / chat イベントは condition を直接持つ。
+// step_change / result_shown など condition を持たないイベントは '-' 表示にする。
+const CONDITION_LABELS = {
+  guided: '段階的ガイド',
+  free: '自由質問',
+}
+
+function renderConditionBadge(condition) {
+  if (condition !== 'guided' && condition !== 'free') {
+    return '<span class="badge badge--unknown">-</span>'
+  }
+  return `<span class="badge badge--${condition}">${escapeHtml(CONDITION_LABELS[condition])}</span>`
+}
+
+function renderPage({ rows, eventType, sessionId, condition, limit, configured }) {
   const filterForm = `
     <form method="GET" class="filters">
       <label>event_type
@@ -35,6 +50,14 @@ function renderPage({ rows, eventType, sessionId, limit, configured }) {
           <option value="">(all)</option>
           ${['session_start', 'step_change', 'chat'].map(t =>
             `<option value="${t}" ${t === eventType ? 'selected' : ''}>${t}</option>`
+          ).join('')}
+        </select>
+      </label>
+      <label>mode
+        <select name="condition">
+          <option value="">(all)</option>
+          ${['guided', 'free'].map(c =>
+            `<option value="${c}" ${c === condition ? 'selected' : ''}>${CONDITION_LABELS[c]}</option>`
           ).join('')}
         </select>
       </label>
@@ -50,9 +73,10 @@ function renderPage({ rows, eventType, sessionId, limit, configured }) {
 
   const tableRows = rows.map(row => `
     <tr>
-      <td>${escapeHtml(new Date(row.created_at).toLocaleString('ja-JP'))}</td>
+      <td>${escapeHtml(new Date(row.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }))}</td>
       <td>${escapeHtml(row.session_id)}</td>
       <td><span class="badge badge--${escapeHtml(row.event_type)}">${escapeHtml(row.event_type)}</span></td>
+      <td>${renderConditionBadge(row.payload?.condition)}</td>
       <td><pre>${escapeHtml(JSON.stringify(row.payload, null, 2))}</pre></td>
     </tr>
   `).join('')
@@ -81,6 +105,9 @@ function renderPage({ rows, eventType, sessionId, limit, configured }) {
     .badge--chat { background: #d7ecff; }
     .badge--session_start { background: #dcf5df; }
     .badge--step_change { background: #fff3cf; }
+    .badge--guided { background: #ffe1c2; color: #7a3e00; font-weight: 600; }
+    .badge--free { background: #e3d9ff; color: #3d1a8a; font-weight: 600; }
+    .badge--unknown { color: #999; }
     .notice { color: #b00020; }
     .meta { color: #666; font-size: 12px; margin-bottom: 12px; }
   </style>
@@ -92,7 +119,7 @@ function renderPage({ rows, eventType, sessionId, limit, configured }) {
   <p class="meta">${rows.length}件表示中</p>
   <table>
     <thead>
-      <tr><th>日時</th><th>session_id</th><th>event_type</th><th>payload</th></tr>
+      <tr><th>日時</th><th>session_id</th><th>event_type</th><th>mode</th><th>payload</th></tr>
     </thead>
     <tbody>
       ${tableRows}
@@ -111,11 +138,12 @@ export default async function handler(req, res) {
   const supabase = getSupabase()
   const eventType = req.query?.event_type ?? ''
   const sessionId = req.query?.session_id ?? ''
+  const condition = req.query?.condition ?? ''
   const limit = Math.min(Number(req.query?.limit) || 100, 1000)
 
   if (!supabase) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
-    return res.status(200).send(renderPage({ rows: [], eventType, sessionId, limit, configured: false }))
+    return res.status(200).send(renderPage({ rows: [], eventType, sessionId, condition, limit, configured: false }))
   }
 
   let query = supabase
@@ -126,6 +154,9 @@ export default async function handler(req, res) {
 
   if (eventType) query = query.eq('event_type', eventType)
   if (sessionId) query = query.eq('session_id', sessionId)
+  // payload はJSONB列。 ->> でテキストとして条件(guided/free)を絞り込む。
+  // step_change等 condition を持たないイベントはこの絞り込みでは出てこない点に注意。
+  if (condition) query = query.eq('payload->>condition', condition)
 
   const { data, error } = await query
 
@@ -134,5 +165,5 @@ export default async function handler(req, res) {
   }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  return res.status(200).send(renderPage({ rows: data ?? [], eventType, sessionId, limit, configured: true }))
+  return res.status(200).send(renderPage({ rows: data ?? [], eventType, sessionId, condition, limit, configured: true }))
 }

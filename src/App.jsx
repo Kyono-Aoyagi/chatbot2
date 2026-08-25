@@ -345,12 +345,12 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       // （summaryはSTEPSの最後なので nextStep だけでは advance の有無を区別できない）
       if (!resultUnlocked && step === 'summary' && botReply.advance) {
         setResultUnlocked(true)
-        logEvent({ sessionId, eventType: 'result_shown', step })
+        logEvent({ sessionId, eventType: 'result_shown', step, condition })
       }
 
       setStep(botReply.nextStep)
 
-      logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep })
+      logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep, condition })
     } catch (err) {
       setError(err.message)
     } finally {
