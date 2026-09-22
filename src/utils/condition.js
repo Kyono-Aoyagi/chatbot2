@@ -15,16 +15,19 @@ const STORAGE_KEY = 'code-reading-tutor.condition'
 export function resolveCondition() {
   const params = new URLSearchParams(window.location.search)
   const fromUrl = params.get('c')
-  if (fromUrl === 'guided' || fromUrl === 'free') {
+  // opportunistic は本番のguided/free比較実験には含めない、パイロット専用の条件。
+  // ?c=opportunistic を明示的に付けたときだけ有効化する（50/50ランダム割当の対象外）。
+  if (fromUrl === 'guided' || fromUrl === 'free' || fromUrl === 'opportunistic') {
     window.localStorage.setItem(STORAGE_KEY, fromUrl)
     return fromUrl
   }
 
   const stored = window.localStorage.getItem(STORAGE_KEY)
-  if (stored === 'guided' || stored === 'free') {
+  if (stored === 'guided' || stored === 'free' || stored === 'opportunistic') {
     return stored
   }
 
+  // 本番実験のランダム割当は guided/free の二択のまま変更しない。
   const assigned = Math.random() < 0.5 ? 'guided' : 'free'
   window.localStorage.setItem(STORAGE_KEY, assigned)
   return assigned
@@ -33,4 +36,5 @@ export function resolveCondition() {
 export const CONDITION_LABELS = {
   guided: '段階的ガイドモード',
   free: '自由質問モード',
+  opportunistic: '日和見モード（パイロット）',
 }

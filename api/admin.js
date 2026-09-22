@@ -33,10 +33,11 @@ function escapeHtml(value) {
 const CONDITION_LABELS = {
   guided: '段階的ガイド',
   free: '自由質問',
+  opportunistic: '日和見（パイロット）',
 }
 
 function renderConditionBadge(condition) {
-  if (condition !== 'guided' && condition !== 'free') {
+  if (!CONDITION_LABELS[condition]) {
     return '<span class="badge badge--unknown">-</span>'
   }
   return `<span class="badge badge--${condition}">${escapeHtml(CONDITION_LABELS[condition])}</span>`
@@ -48,7 +49,7 @@ function renderPage({ rows, eventType, sessionId, condition, limit, configured }
       <label>event_type
         <select name="event_type">
           <option value="">(all)</option>
-          ${['session_start', 'step_change', 'chat'].map(t =>
+          ${['session_start', 'step_change', 'chat', 'mental_state_change'].map(t =>
             `<option value="${t}" ${t === eventType ? 'selected' : ''}>${t}</option>`
           ).join('')}
         </select>
@@ -56,7 +57,7 @@ function renderPage({ rows, eventType, sessionId, condition, limit, configured }
       <label>mode
         <select name="condition">
           <option value="">(all)</option>
-          ${['guided', 'free'].map(c =>
+          ${['guided', 'free', 'opportunistic'].map(c =>
             `<option value="${c}" ${c === condition ? 'selected' : ''}>${CONDITION_LABELS[c]}</option>`
           ).join('')}
         </select>
@@ -107,6 +108,7 @@ function renderPage({ rows, eventType, sessionId, condition, limit, configured }
     .badge--step_change { background: #fff3cf; }
     .badge--guided { background: #ffe1c2; color: #7a3e00; font-weight: 600; }
     .badge--free { background: #e3d9ff; color: #3d1a8a; font-weight: 600; }
+    .badge--opportunistic { background: #d7f5e3; color: #0f6b3a; font-weight: 600; }
     .badge--unknown { color: #999; }
     .notice { color: #b00020; }
     .meta { color: #666; font-size: 12px; margin-bottom: 12px; }

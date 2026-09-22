@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
-import { STEP_LABELS, getInitialBotMessage, sendToGemini } from './bot/geminiBot'
+import { STEP_LABELS, getInitialBotMessage, getInitialMentalState, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
 import { generateSessionId, logEvent } from './utils/logger'
 import { resolveCondition, CONDITION_LABELS } from './utils/condition'
 import './styles/global.css'
@@ -284,12 +284,15 @@ function ResultPanel({ expectedOutput, unlocked }) {
 function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
   const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title, condition)])
   const [input, setInput] = useState('')
-  const [step, setStep] = useState(condition === 'free' ? 'free' : 'purpose')
+  const [step, setStep] = useState(condition === 'free' ? 'free' : condition === 'opportunistic' ? 'opportunistic' : 'purpose')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
-  // free条件は自己説明を強制する設計ではないので最初から解除。
+  // opportunistic条件専用の状態。stepの代わりにこちらで進行を管理する。
+  const [mentalModel, setMentalModel] = useState(() => getInitialMentalState().mentalModel)
+  const [openQuestions, setOpenQuestions] = useState(() => getInitialMentalState().openQuestions)
+  // free/opportunistic条件は自己説明を強制する設計ではないので最初から解除。
   // guided条件は summaryステップがadvance:trueになった瞬間に解除する。
-  const [resultUnlocked, setResultUnlocked] = useState(condition === 'free')
+  const [resultUnlocked, setResultUnlocked] = useState(condition === 'free' || condition === 'opportunistic')
   const messagesEndRef = useRef(null)
 
   // レイアウト調整用
@@ -323,34 +326,65 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       // （今回のuserMessageは含めない。userMessage引数として別送信するため）
       const history = messages.map(m => ({ role: m.role, content: m.content }))
 
-      const botReply = await sendToGemini({
-        sessionId,
-        activeCode,
-        currentStep: step,
-        userMessage: text,
-        history,
-        condition,
-      })
+      if (condition === 'opportunistic') {
+        // opportunistic条件はstep進行ではなく mentalModel/openQuestions を毎回送受信して状態を更新する。
+        const botReply = await sendToGeminiOpportunistic({
+          sessionId,
+          activeCode,
+          mentalModel,
+          openQuestions,
+          userMessage: text,
+          history,
+        })
 
-      const botMessage = {
-        role: 'bot',
-        content: botReply.content,
-        step: botReply.nextStep,
-        timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+        const botMessage = {
+          role: 'bot',
+          content: botReply.content,
+          step: 'opportunistic',
+          timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+        }
+
+        setMessages(prev => [...prev, botMessage])
+        setMentalModel(botReply.mentalModel)
+        setOpenQuestions(botReply.openQuestions)
+
+        logEvent({
+          sessionId,
+          eventType: 'mental_state_change',
+          mentalModel: botReply.mentalModel,
+          openQuestions: botReply.openQuestions,
+          condition,
+        })
+      } else {
+        const botReply = await sendToGemini({
+          sessionId,
+          activeCode,
+          currentStep: step,
+          userMessage: text,
+          history,
+          condition,
+        })
+
+        const botMessage = {
+          role: 'bot',
+          content: botReply.content,
+          step: botReply.nextStep,
+          timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+        }
+
+        setMessages(prev => [...prev, botMessage])
+
+        // summaryステップがadvance:trueになった瞬間だけ実行結果を解除する
+        // （summaryはSTEPSの最後なので nextStep だけでは advance の有無を区別できない）
+        if (!resultUnlocked && step === 'summary' && botReply.advance) {
+          setResultUnlocked(true)
+          logEvent({ sessionId, eventType: 'result_shown', step, condition })
+        }
+
+        setStep(botReply.nextStep)
+
+        logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep, condition })
       }
-
-      setMessages(prev => [...prev, botMessage])
-
-      // summaryステップがadvance:trueになった瞬間だけ実行結果を解除する
-      // （summaryはSTEPSの最後なので nextStep だけでは advance の有無を区別できない）
-      if (!resultUnlocked && step === 'summary' && botReply.advance) {
-        setResultUnlocked(true)
-        logEvent({ sessionId, eventType: 'result_shown', step, condition })
-      }
-
-      setStep(botReply.nextStep)
-
-      logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep, condition })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -421,6 +455,23 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
             <span>チャット</span>
             <span>ステップ: {STEP_LABELS[step] ?? step}</span>
           </div>
+
+          {condition === 'opportunistic' && (
+            <div className="open-questions" aria-label="保留中の問い">
+              <div className="open-questions__mental">
+                why: {mentalModel.why} / how: {mentalModel.how}
+              </div>
+              {openQuestions.length > 0 && (
+                <ul className="open-questions__list">
+                  {openQuestions.map(q => (
+                    <li key={q.id} className={`open-questions__item open-questions__item--${q.status}`}>
+                      [{q.level}] {q.target}（{q.status}）
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="messages">
             {messages.map((message, index) => (

@@ -19,6 +19,7 @@ export const STEP_LABELS = {
   early_stop:   '早期終了',
   summary:      'まとめ',
   free:         '自由に質問できます',
+  opportunistic: '気になったところから自由に',
 }
 
 export function getNextStep(currentStep) {
@@ -37,11 +38,29 @@ export function getInitialBotMessage(codeTitle, condition) {
     }
   }
 
+  if (condition === 'opportunistic') {
+    return {
+      role: 'bot',
+      content: `「${codeTitle}」のコードリーディングを始めましょう。\nまず、このコード全体は何をするためのものに見えますか？気になった行や変数があれば、途中で自由に言及してもらっても構いません。`,
+      step: 'opportunistic',
+      timestamp: new Date().toISOString(),
+    }
+  }
+
   return {
     role: 'bot',
     content: `「${codeTitle}」のコードリーディングを始めましょう。\nまず、このコード全体は何をするためのものに見えますか？関数名や最後の数行を手がかりに、自分の言葉で書いてみてください。`,
     step: 'purpose',
     timestamp: new Date().toISOString(),
+  }
+}
+
+// opportunistic条件用の初期状態。
+// mentalModel: why/howの集約理解度。 openQuestions: 局所的な問いの保留キュー。
+export function getInitialMentalState() {
+  return {
+    mentalModel: { why: 'unresolved', how: 'unresolved' },
+    openQuestions: [],
   }
 }
 
@@ -74,5 +93,36 @@ export async function sendToGemini({ sessionId, activeCode, currentStep, userMes
     // 呼び出し側で「summary完了の瞬間」を検知するために必要
     // （currentStepがすでに最後のステップの場合、nextStepだけではadvanceの有無を区別できないため）
     advance: data.advance === true,
+  }
+}
+
+// opportunistic条件専用の送信関数。
+// stepの代わりにmentalModelとopenQuestionsを毎回送受信する（サーバーレスなので状態はクライアント側が持つ）。
+export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalModel, openQuestions, userMessage, history }) {
+  const response = await fetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId,
+      activeCode,
+      userMessage,
+      history,
+      condition: 'opportunistic',
+      mentalModel,
+      openQuestions,
+    }),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error ?? `サーバーエラー (${response.status})`)
+  }
+
+  const data = await response.json()
+
+  return {
+    content: data.reply,
+    mentalModel: data.mentalModel ?? mentalModel,
+    openQuestions: Array.isArray(data.openQuestions) ? data.openQuestions : openQuestions,
   }
 }

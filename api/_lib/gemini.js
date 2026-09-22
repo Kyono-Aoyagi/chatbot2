@@ -85,7 +85,68 @@ const TUTOR_RULES_FREE = `
 {"reply":"ここに返答テキスト"}
 `.trim()
 
-function buildSystemPrompt({ activeCode, currentStep, condition }) {
+// opportunistic条件用のルール（Letovsky, 1986 の日和見主義モデルを参考にした設計）。
+// 固定ステップ順ではなく、
+//   1. ユーザーの発言中の局所的な手がかり（ボトムアップ割り込み）
+//   2. 保留中の問い(openQuestions)との関連（再訪）
+//   3. 上記が無ければ mentalModel.why / how のうち手薄な方（トップダウン継続）
+// の優先順位で次の一手を選ばせる。返答はreplyに加えてmentalModelとopenQuestionsの
+// 「次の状態そのもの」をJSONで返させる（差分ではなく全体を返させることで、
+// パース失敗時に直前の状態へフォールバックしやすくする）。
+const MAX_OPEN_QUESTIONS = 5
+
+const TUTOR_RULES_OPPORTUNISTIC = `
+あなたはコードリーディングを支援するチューターです。日和見主義的な理解プロセス（Letovskyモデル）を模倣します。
+
+## 状態の見方
+- mentalModel.why: コード全体の意図についてのユーザーの理解度（unresolved/conjectured/confirmed）
+- mentalModel.how: 実現方略（アルゴリズム・処理の流れ）についてのユーザーの理解度（同上）
+- openQuestions: 保留中・進行中の局所的な問い。各要素は
+  { "id": string, "level": "why"|"how"|"what", "target": string, "status": "open"|"deferred"|"resolved" }
+  最大${MAX_OPEN_QUESTIONS}件までしか保持しない。
+
+## 次の一手を選ぶ優先順位
+1. ユーザーの発言が、コード中の具体的な変数・行・処理に自発的に言及している場合、
+   たとえ今扱っている話題と違っても、その言及を捉えて短く深掘りする問いを返してよい。
+   新しい着眼点なら openQuestions に status:"open" で追加する（levelは why/how/what から適切なものを選ぶ）。
+2. ユーザーの発言が、openQuestions内の status:"deferred" な項目と関連しそうな場合、
+   それを取り上げて「さっき保留にしていた〇〇、今の話とつながりそうです」のように再訪する。
+   解決できたと判断したら該当項目の status を "resolved" にする。
+3. 上記いずれにも該当しない場合のみ、mentalModel.why または how のうち unresolved な方について
+   トップダウンに問いかける。両方 confirmed に近ければ、openQuestions の open な項目から選んでよい。
+4. ユーザーが「わからない」「難しい」などで詰まった場合、今扱っている問いを status:"deferred" にし、
+   別の観点（もう一方のwhy/how、または他のopenQuestions）に無理なく移ってよい。同じ問いを繰り返し続けない。
+5. openQuestionsがすでに${MAX_OPEN_QUESTIONS}件ある場合、新規追加より既存項目の解決・保留判断を優先する。
+
+## 絶対に守るルール
+- コードの動作を自分から説明・解説しない
+- 答えや正解を直接言わない
+- 「〜ですね」と相槌だけで終わらない
+- 返答は最大で8文以内に収める
+- 日本語で返答する
+
+## 返答形式（厳守）
+必ず以下のJSON形式だけで返答すること。前後に説明文やマークダウンを付けない。
+{"reply":"ここに返答テキスト","mentalModel":{"why":"unresolved|conjectured|confirmed","how":"unresolved|conjectured|confirmed"},"openQuestions":[{"id":"q1","level":"why","target":"...","status":"open"}]}
+`.trim()
+
+function buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions }) {
+  if (condition === 'opportunistic') {
+    return `
+${TUTOR_RULES_OPPORTUNISTIC}
+
+## 対象コード（${activeCode.filename ?? 'code'}）
+言語: ${activeCode.language ?? '不明'}
+\`\`\`
+${activeCode.code}
+\`\`\`
+
+## 現在の状態
+mentalModel: ${JSON.stringify(mentalModel ?? { why: 'unresolved', how: 'unresolved' })}
+openQuestions: ${JSON.stringify(openQuestions ?? [])}
+`.trim()
+  }
+
   if (condition === 'free') {
     return `
 ${TUTOR_RULES_FREE}
@@ -145,7 +206,39 @@ function toGeminiHistory(history) {
   }))
 }
 
-export async function askGemini({ activeCode, currentStep, userMessage, history, condition }) {
+// opportunistic条件のmentalModelが不正/欠落していた場合のデフォルト値。
+function defaultMentalModel() {
+  return { why: 'unresolved', how: 'unresolved' }
+}
+
+const VALID_STATUS = new Set(['unresolved', 'conjectured', 'confirmed'])
+const VALID_LEVEL = new Set(['why', 'how', 'what'])
+const VALID_Q_STATUS = new Set(['open', 'deferred', 'resolved'])
+
+// LLMが返したmentalModelを軽くサニタイズする。壊れていれば直前の状態にフォールバック。
+function sanitizeMentalModel(candidate, fallback) {
+  const base = fallback ?? defaultMentalModel()
+  if (!candidate || typeof candidate !== 'object') return base
+  const why = VALID_STATUS.has(candidate.why) ? candidate.why : base.why
+  const how = VALID_STATUS.has(candidate.how) ? candidate.how : base.how
+  return { why, how }
+}
+
+// LLMが返したopenQuestionsを軽くサニタイズする（不正要素は捨て、MAX_OPEN_QUESTIONS件に切り詰め）。
+function sanitizeOpenQuestions(candidate, fallback) {
+  if (!Array.isArray(candidate)) return Array.isArray(fallback) ? fallback : []
+  const cleaned = candidate
+    .filter(q => q && typeof q === 'object' && typeof q.id === 'string' && typeof q.target === 'string')
+    .map(q => ({
+      id: q.id,
+      level: VALID_LEVEL.has(q.level) ? q.level : 'what',
+      target: String(q.target).slice(0, 200),
+      status: VALID_Q_STATUS.has(q.status) ? q.status : 'open',
+    }))
+  return cleaned.slice(0, MAX_OPEN_QUESTIONS)
+}
+
+export async function askGemini({ activeCode, currentStep, userMessage, history, condition, mentalModel, openQuestions }) {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。環境変数を確認してください。')
   }
@@ -154,7 +247,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
   const model = genAI.getGenerativeModel({
     model: MODEL_NAME,
-    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition }),
+    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions }),
   })
   const chat = model.startChat({ history: toGeminiHistory(history) })
   const chatReadyMs = Date.now() - t0
@@ -165,11 +258,18 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
 
   const raw = result.response.text()
 
-  // free条件は {"reply":...} のみを返すため、"advance" の有無に依存しない形で抽出する。
+  // free/opportunistic条件は "advance" を持たないため、"reply" の有無だけに依存する形で抽出する。
   const jsonMatch = raw.match(/\{[\s\S]*"reply"[\s\S]*\}/)
   if (!jsonMatch) {
     console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
-    return { reply: raw.trim(), advance: false, chatReadyMs, apiCallMs }
+    return {
+      reply: raw.trim(),
+      advance: false,
+      mentalModel: sanitizeMentalModel(null, mentalModel),
+      openQuestions: sanitizeOpenQuestions(null, openQuestions),
+      chatReadyMs,
+      apiCallMs,
+    }
   }
 
   try {
@@ -179,11 +279,21 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     return {
       reply: String(parsed.reply ?? '').trim(),
       advance,
+      // guided/free条件では常に空の状態を返すだけで、フロント側は無視して構わない。
+      mentalModel: sanitizeMentalModel(parsed.mentalModel, mentalModel),
+      openQuestions: sanitizeOpenQuestions(parsed.openQuestions, openQuestions),
       chatReadyMs,
       apiCallMs,
     }
   } catch (e) {
     console.warn('[gemini] JSONパース失敗:', e.message, 'raw:', raw)
-    return { reply: raw.trim(), advance: false, chatReadyMs, apiCallMs }
+    return {
+      reply: raw.trim(),
+      advance: false,
+      mentalModel: sanitizeMentalModel(null, mentalModel),
+      openQuestions: sanitizeOpenQuestions(null, openQuestions),
+      chatReadyMs,
+      apiCallMs,
+    }
   }
 }
