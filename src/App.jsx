@@ -386,7 +386,11 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep, condition })
       }
     } catch (err) {
-      setError(err.message)
+      // 失敗した送信は履歴に残さず、入力欄に戻す。
+      // （応答の無い user 発言が残ると、次回の history が user 連続の形になり、送信し直す際に重複もするため）
+      setMessages(prev => prev.filter(m => m !== userMessage))
+      setInput(current => current || text)
+      setError(`${err.message} 入力した内容は残してあります。`)
     } finally {
       setIsLoading(false)
       setTimeout(scrollToBottom, 50)

@@ -49,7 +49,7 @@ function renderPage({ rows, eventType, sessionId, condition, limit, configured }
       <label>event_type
         <select name="event_type">
           <option value="">(all)</option>
-          ${['session_start', 'step_change', 'chat', 'mental_state_change'].map(t =>
+          ${['session_start', 'step_change', 'chat', 'chat_error', 'mental_state_change'].map(t =>
             `<option value="${t}" ${t === eventType ? 'selected' : ''}>${t}</option>`
           ).join('')}
         </select>

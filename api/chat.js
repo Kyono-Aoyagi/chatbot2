@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     }
 
     const t0 = Date.now()
-    const { reply, advance, move, note, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, chatReadyMs, apiCallMs } = await askGemini({
+    const { reply, advance, move, note, retries, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, chatReadyMs, apiCallMs } = await askGemini({
       activeCode,
       currentStep,
       userMessage,
@@ -46,6 +46,7 @@ export default async function handler(req, res) {
       advance,
       move,
       note,
+      retries,
       mentalModel: nextMentalModel,
       openQuestions: nextOpenQuestions,
       totalMs,
@@ -56,6 +57,32 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply, advance, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions })
   } catch (error) {
     console.error('[api/chat error]', error)
+
+    // Gemini側の高負荷など一時的なエラーは、リトライ後も失敗した場合にここへ来る（gemini.js が transient を付ける）。
+    // 利用者向けには短い案内文を返し、生のエラー文は返さない（ログには残す）。
+    const busy = error?.transient === true
+    try {
+      const { sessionId, condition, currentStep, userMessage } = req.body ?? {}
+      await insertLog({
+        sessionId,
+        eventType: 'chat_error',
+        condition,
+        currentStep,
+        userMessage,
+        transient: busy,
+        retries: error?.retries ?? null,
+        errorMessage: String(error?.message ?? error).slice(0, 500),
+      })
+    } catch (logError) {
+      console.error('[api/chat error log failed]', logError)
+    }
+
+    if (busy) {
+      return res.status(503).json({
+        error: 'AIが混み合っています。少し待ってからもう一度送信してください。',
+        code: 'model_busy',
+      })
+    }
     return res.status(500).json({ error: error.message })
   }
 }

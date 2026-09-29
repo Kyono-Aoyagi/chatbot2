@@ -294,6 +294,50 @@ function sanitizeOpenQuestions(candidate, fallback) {
   return cleaned.slice(0, MAX_OPEN_QUESTIONS)
 }
 
+// --- 一時的なエラーのリトライ ---
+// 503(高負荷) / 429(レート制限) / 500・502・504 / 通信エラーは一時的なことが多いので、短く待って再試行する。
+// 400(不正なリクエスト)や認証エラーなどは再試行しても直らないので、そのまま投げる。
+const RETRY_DELAYS_MS = [1000, 2000] // 最大2回リトライ(1回目は1秒後、2回目は2秒後)
+// 関数の実行時間制限に余裕を持たせるため、リトライを含めた経過時間がこれを超えるなら次のリトライはしない。
+const RETRY_BUDGET_MS = 8000
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+
+function isTransientError(err) {
+  if (RETRYABLE_STATUS.has(Number(err?.status))) return true
+  const message = String(err?.message ?? '')
+  // SDKのエラーメッセージは "[503 Service Unavailable]" のようにステータスコードを含む
+  if (/\[(429|500|502|503|504)\b/.test(message)) return true
+  // 通信自体の失敗
+  return /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(message)
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+// 失敗時に半端な状態が残らないよう、試行ごとに chat を作り直す（startChat はローカル処理で軽い）。
+// 最終的に失敗した場合は、投げるエラーに transient（一時的か）と retries（リトライ回数）を付ける。
+async function sendWithRetry(createChat, userMessage) {
+  const startedAt = Date.now()
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await createChat().sendMessage(userMessage)
+      return { result, retries: attempt }
+    } catch (err) {
+      const transient = isTransientError(err)
+      const delay = RETRY_DELAYS_MS[attempt]
+      const withinBudget = delay !== undefined && Date.now() - startedAt + delay <= RETRY_BUDGET_MS
+      if (!transient || !withinBudget) {
+        if (err && typeof err === 'object') {
+          err.transient = transient
+          err.retries = attempt
+        }
+        throw err
+      }
+      console.warn(`[gemini] 一時的なエラー。${delay}ms後に再試行します(${attempt + 1}/${RETRY_DELAYS_MS.length}):`, err.message)
+      await sleep(delay)
+    }
+  }
+}
+
 export async function askGemini({ activeCode, currentStep, userMessage, history, condition, mentalModel, openQuestions }) {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。環境変数を確認してください。')
@@ -305,11 +349,13 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     model: MODEL_NAME,
     systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions }),
   })
-  const chat = model.startChat({ history: toGeminiHistory(history) })
+  const geminiHistory = toGeminiHistory(history)
+  const createChat = () => model.startChat({ history: geminiHistory })
   const chatReadyMs = Date.now() - t0
 
+  // apiCallMs にはリトライの待ち時間も含まれる。リトライ回数は retries で別に記録する。
   const apiT0 = Date.now()
-  const result = await chat.sendMessage(userMessage)
+  const { result, retries } = await sendWithRetry(createChat, userMessage)
   const apiCallMs = Date.now() - apiT0
 
   const raw = result.response.text()
@@ -320,6 +366,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
     return {
       reply: raw.trim(),
+      retries,
       advance: false,
       mentalModel: sanitizeMentalModel(null, mentalModel),
       openQuestions: sanitizeOpenQuestions(null, openQuestions),
@@ -337,6 +384,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
       advance,
       move: sanitizeMove(parsed.move),
       note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
+      retries,
       // guided/free条件では常に空の状態を返すだけで、フロント側は無視して構わない。
       mentalModel: sanitizeMentalModel(parsed.mentalModel, mentalModel),
       openQuestions: sanitizeOpenQuestions(parsed.openQuestions, openQuestions),
@@ -347,6 +395,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     console.warn('[gemini] JSONパース失敗:', e.message, 'raw:', raw)
     return {
       reply: raw.trim(),
+      retries,
       advance: false,
       mentalModel: sanitizeMentalModel(null, mentalModel),
       openQuestions: sanitizeOpenQuestions(null, openQuestions),
