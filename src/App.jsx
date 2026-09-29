@@ -347,14 +347,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         setMessages(prev => [...prev, botMessage])
         setMentalModel(botReply.mentalModel)
         setOpenQuestions(botReply.openQuestions)
-
-        logEvent({
-          sessionId,
-          eventType: 'mental_state_change',
-          mentalModel: botReply.mentalModel,
-          openQuestions: botReply.openQuestions,
-          condition,
-        })
+        // mentalModel/openQuestions の推移は、サーバーが chat ログに毎回残すので、ここでは別途ログしない。
       } else {
         const botReply = await sendToGemini({
           sessionId,
@@ -382,8 +375,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         }
 
         setStep(botReply.nextStep)
-
-        logEvent({ sessionId, eventType: 'step_change', from: step, to: botReply.nextStep, condition })
+        // ステップ遷移は、chat ログの currentStep（送信時点）と advance から導出できるので別途ログしない。
       }
     } catch (err) {
       // 失敗した送信は履歴に残さず、入力欄に戻す。
@@ -546,6 +538,10 @@ export default function App() {
       eventType: 'session_start',
       codeId: codeObj.id,
       source: codeObj.source,
+      // 問題別・難易度別にログを見るため。ユーザー貼付コードは difficulty/tags が無い（コード本文は保存しない）。
+      title: codeObj.title,
+      difficulty: codeObj.difficulty,
+      tags: codeObj.tags,
       condition,
     })
   }

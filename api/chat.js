@@ -1,5 +1,22 @@
-import { askGemini } from './_lib/gemini.js'
+import { askGemini, MODEL_NAME, PROMPT_VERSION } from './_lib/gemini.js'
 import { insertLog } from './_lib/supabase.js'
+
+// chat / chat_error の両方に付ける共通のログ項目。
+// codeId: どの問題か。turn: このセッションの何ターン目のユーザー発言か（history中のuser発言数+1）。
+// promptVersion / model: どの版のプロンプト・モデルで取った会話かを後から区別するため。
+function buildLogContext(body) {
+  const { activeCode, currentStep, history, sessionId, condition } = body ?? {}
+  const turn = Array.isArray(history) ? history.filter(m => m?.role === 'user').length + 1 : 1
+  return {
+    sessionId,
+    condition,
+    currentStep,
+    codeId: activeCode?.id ?? null,
+    turn,
+    promptVersion: PROMPT_VERSION,
+    model: MODEL_NAME,
+  }
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -15,14 +32,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { activeCode, currentStep, userMessage, history, sessionId, condition, mentalModel, openQuestions } = req.body ?? {}
+    const { activeCode, currentStep, userMessage, history, condition, mentalModel, openQuestions } = req.body ?? {}
 
     if (!activeCode?.code || !userMessage) {
       return res.status(400).json({ error: 'activeCode.code と userMessage は必須です。' })
     }
 
     const t0 = Date.now()
-    const { reply, advance, move, note, retries, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, chatReadyMs, apiCallMs } = await askGemini({
+    const {
+      reply, advance, move, note, retries, parseFailed,
+      mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, apiCallMs,
+    } = await askGemini({
       activeCode,
       currentStep,
       userMessage,
@@ -34,23 +54,22 @@ export default async function handler(req, res) {
     const totalMs = Date.now() - t0
 
     // チャットの往復をSupabaseに保存（本番ではVercel Logsではなくこちらを一次ソースにする）
-    // opportunistic条件ではmentalModel/openQuestionsのスナップショットも残し、
+    // opportunistic条件ではmentalModel/openQuestionsのスナップショット（この返答の「後」の状態）も残し、
     // 保留→解決の推移や再訪の頻度を後からログだけで追えるようにする。
+    // guidedのステップ遷移は currentStep（送信時点）と advance から導出できるので、step_change は別に残さない。
     await insertLog({
-      sessionId,
+      ...buildLogContext(req.body),
       eventType: 'chat',
-      condition,
-      currentStep,
       userMessage,
       reply,
       advance,
       move,
       note,
+      parseFailed,
       retries,
       mentalModel: nextMentalModel,
       openQuestions: nextOpenQuestions,
       totalMs,
-      chatReadyMs,
       apiCallMs,
     })
 
@@ -62,13 +81,10 @@ export default async function handler(req, res) {
     // 利用者向けには短い案内文を返し、生のエラー文は返さない（ログには残す）。
     const busy = error?.transient === true
     try {
-      const { sessionId, condition, currentStep, userMessage } = req.body ?? {}
       await insertLog({
-        sessionId,
+        ...buildLogContext(req.body),
         eventType: 'chat_error',
-        condition,
-        currentStep,
-        userMessage,
+        userMessage: req.body?.userMessage,
         transient: busy,
         retries: error?.retries ?? null,
         errorMessage: String(error?.message ?? error).slice(0, 500),

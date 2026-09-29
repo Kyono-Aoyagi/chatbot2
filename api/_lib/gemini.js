@@ -1,7 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY
-const MODEL_NAME = 'gemini-3.1-flash-lite'
+export const MODEL_NAME = 'gemini-3.1-flash-lite'
+
+// プロンプト（TUTOR_RULES* / STEP_FOCUS / buildSystemPrompt）を変更したときは、この値を手で更新すること。
+// ログに記録され、「どの版のプロンプトで取った会話か」を後から区別できるようにする。形式は日付+アルファベット。
+export const PROMPT_VERSION = '2026-09-29a'
 
 // 汎用フォーカス（コード構造に依存しない書き方）。
 // 特定コード専用の着目観点は codeLibrary.js 側の activeCode.stepFocus[step] で上書きできる。
@@ -366,6 +370,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
     return {
       reply: raw.trim(),
+      parseFailed: true,
       retries,
       advance: false,
       mentalModel: sanitizeMentalModel(null, mentalModel),
@@ -384,6 +389,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
       advance,
       move: sanitizeMove(parsed.move),
       note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
+      parseFailed: false,
       retries,
       // guided/free条件では常に空の状態を返すだけで、フロント側は無視して構わない。
       mentalModel: sanitizeMentalModel(parsed.mentalModel, mentalModel),
@@ -395,6 +401,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     console.warn('[gemini] JSONパース失敗:', e.message, 'raw:', raw)
     return {
       reply: raw.trim(),
+      parseFailed: true,
       retries,
       advance: false,
       mentalModel: sanitizeMentalModel(null, mentalModel),
