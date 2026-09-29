@@ -114,9 +114,38 @@ const TUTOR_RULES_OPPORTUNISTIC = `
    解決できたと判断したら該当項目の status を "resolved" にする。
 3. 上記いずれにも該当しない場合のみ、mentalModel.why または how のうち unresolved な方について
    トップダウンに問いかける。両方 confirmed に近ければ、openQuestions の open な項目から選んでよい。
-4. ユーザーが「わからない」「難しい」などで詰まった場合、今扱っている問いを status:"deferred" にし、
-   別の観点（もう一方のwhy/how、または他のopenQuestions）に無理なく移ってよい。同じ問いを繰り返し続けない。
+4. ユーザーが「わからない」「難しい」などで詰まった場合、今扱っている問いを status:"deferred" にする。
+   そのうえで、次の中から最も軽い支援を選ぶ。
+   a. 問いを絞る（move: narrow）：見るべき箇所を1つだけ指し、二択や短い穴埋めで答えられる形に言い換える。
+   b. 小さな入力で追わせる（move: trace）：コード自体は変えず、入力を小さく（3要素程度）して、1手ずつ何が起きるかを追わせる。
+   c. 別の観点へ移る（move: switch）：aやbでも進まない場合、または直前に同種の支援をすでに出している場合は、
+      もう一方のwhy/howや他のopenQuestionsに移る。
+   同じ問い・同じ言い回しを繰り返さない。別のコードを新しく作って示すことはしない。
 5. openQuestionsがすでに${MAX_OPEN_QUESTIONS}件ある場合、新規追加より既存項目の解決・保留判断を優先する。
+6. ユーザーがコードについて指摘や反論をした場合（例：「〇〇なんてなくない？」）、まずコードに照らして正しいかを確認する。
+   正しければ認めたうえで問いを修正する（move: correct）。誤っていれば、コード上の該当箇所を引用して確認を促す。
+
+## 行の指し方
+- 行番号は使わない（ユーザーの画面の行番号と一致する保証がない）。変数名・式・関数名をそのまま引用して指す。
+
+## mentalModelの更新基準
+- unresolved → conjectured：ユーザーが自分の言葉で推測を述べた（正誤は問わない）。
+  名前を繰り返しただけ（例：「バブルソート」とだけ言った）は conjectured 止まり。
+- conjectured → confirmed：ユーザー自身の説明が、下に「参照情報」があればその要点と、無ければコードから自分で判断した内容と一致しており、
+  かつコード上の根拠（変数・処理）への言及を伴うとき。
+- 誤解が見つかったら confirmed や conjectured から戻してよい。
+- 1回の発言で why と how を同時に confirmed にすることは避ける。
+
+## 参照情報の扱い（対象コードの後に「参照情報」がある場合のみ）
+- 参照情報はチューターだけが知る正解と手がかりである。ユーザーには絶対に言わない。文言をそのまま使わない。
+- landmarks：ユーザーがその要素に自発的に触れたときに深掘りに使う。ユーザーが詰まっていないときは、こちらから先に名指ししない。
+  詰まったときに「見るべき場所」を選ぶ候補としては使ってよい。
+- traps：ユーザーの発言にそのつまずきの兆候が見えたときだけ、答えを言わずに気づかせる問いとして使う。
+
+## moveとnote（ログ分析用。ユーザーには見せない）
+- move は今回の返答でどの一手を選んだかを表す。
+  bottom_up（優先順位1）/ revisit（2）/ top_down（3）/ narrow・trace・switch（4）/ correct（6）/ other
+- note は、その一手を選んだ理由を40字以内で書く。
 
 ## 絶対に守るルール
 - コードの動作を自分から説明・解説しない
@@ -127,8 +156,29 @@ const TUTOR_RULES_OPPORTUNISTIC = `
 
 ## 返答形式（厳守）
 必ず以下のJSON形式だけで返答すること。前後に説明文やマークダウンを付けない。
-{"reply":"ここに返答テキスト","mentalModel":{"why":"unresolved|conjectured|confirmed","how":"unresolved|conjectured|confirmed"},"openQuestions":[{"id":"q1","level":"why","target":"...","status":"open"}]}
+{"reply":"ここに返答テキスト","move":"bottom_up|revisit|top_down|narrow|trace|switch|correct|other","note":"理由を40字以内で","mentalModel":{"why":"unresolved|conjectured|confirmed","how":"unresolved|conjectured|confirmed"},"openQuestions":[{"id":"q1","level":"why","target":"...","status":"open"}]}
 `.trim()
+
+// 問題側が持つ「チューターだけが知る情報」(reference / landmarks / traps)を、opportunistic用のプロンプト断片にする。
+// どれも無い場合（ユーザー貼付コードなど）は空文字を返し、AIがコードから自力で判断する。
+function buildReferenceBlock(activeCode) {
+  const { reference, landmarks, traps } = activeCode ?? {}
+  const lines = []
+  if (reference?.why) lines.push(`- why（全体の意図）: ${reference.why}`)
+  if (reference?.how) lines.push(`- how（実現方略）: ${reference.how}`)
+  if (Array.isArray(landmarks) && landmarks.length) {
+    lines.push('- landmarks（ユーザーが自発的に触れたら深掘りする手がかり）:')
+    for (const l of landmarks.slice(0, 5)) {
+      lines.push(typeof l === 'string' ? `  - ${l}` : `  - ${l?.target ?? ''}: ${l?.note ?? ''}`)
+    }
+  }
+  if (Array.isArray(traps) && traps.length) {
+    lines.push('- traps（つまずきやすい点）:')
+    for (const t of traps.slice(0, 5)) lines.push(`  - ${t}`)
+  }
+  if (!lines.length) return ''
+  return `## 参照情報（チューター専用。ユーザーに直接言わない）\n${lines.join('\n')}\n\n`
+}
 
 function buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions }) {
   if (condition === 'opportunistic') {
@@ -141,7 +191,7 @@ ${TUTOR_RULES_OPPORTUNISTIC}
 ${activeCode.code}
 \`\`\`
 
-## 現在の状態
+${buildReferenceBlock(activeCode)}## 現在の状態
 mentalModel: ${JSON.stringify(mentalModel ?? { why: 'unresolved', how: 'unresolved' })}
 openQuestions: ${JSON.stringify(openQuestions ?? [])}
 `.trim()
@@ -214,6 +264,12 @@ function defaultMentalModel() {
 const VALID_STATUS = new Set(['unresolved', 'conjectured', 'confirmed'])
 const VALID_LEVEL = new Set(['why', 'how', 'what'])
 const VALID_Q_STATUS = new Set(['open', 'deferred', 'resolved'])
+const VALID_MOVE = new Set(['bottom_up', 'revisit', 'top_down', 'narrow', 'trace', 'switch', 'correct', 'other'])
+
+// opportunistic条件のログ分析用タグ。不正値・未指定は null（guided/free条件でも null になる）。
+function sanitizeMove(candidate) {
+  return VALID_MOVE.has(candidate) ? candidate : null
+}
 
 // LLMが返したmentalModelを軽くサニタイズする。壊れていれば直前の状態にフォールバック。
 function sanitizeMentalModel(candidate, fallback) {
@@ -279,6 +335,8 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     return {
       reply: String(parsed.reply ?? '').trim(),
       advance,
+      move: sanitizeMove(parsed.move),
+      note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
       // guided/free条件では常に空の状態を返すだけで、フロント側は無視して構わない。
       mentalModel: sanitizeMentalModel(parsed.mentalModel, mentalModel),
       openQuestions: sanitizeOpenQuestions(parsed.openQuestions, openQuestions),

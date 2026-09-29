@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     }
 
     const t0 = Date.now()
-    const { reply, advance, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, chatReadyMs, apiCallMs } = await askGemini({
+    const { reply, advance, move, note, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, chatReadyMs, apiCallMs } = await askGemini({
       activeCode,
       currentStep,
       userMessage,
@@ -44,6 +44,8 @@ export default async function handler(req, res) {
       userMessage,
       reply,
       advance,
+      move,
+      note,
       mentalModel: nextMentalModel,
       openQuestions: nextOpenQuestions,
       totalMs,
