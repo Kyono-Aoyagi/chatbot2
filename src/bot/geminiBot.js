@@ -57,10 +57,27 @@ export function getInitialBotMessage(codeTitle, condition) {
 
 // opportunistic条件用の初期状態。
 // mentalModel: why/howの集約理解度。 openQuestions: 局所的な問いの保留キュー。
-export function getInitialMentalState() {
+// trapStates: activeCode.traps ごとの状態（id は t1, t2, ... = サーバー側 buildTrapList と同じ並び・同じ上限）。
+// phase: 'reading'（読解中）| 'done'（完了後）。
+const MAX_TRAPS = 5
+
+export function getInitialMentalState(activeCode) {
+  const traps = Array.isArray(activeCode?.traps) ? activeCode.traps.slice(0, MAX_TRAPS) : []
   return {
     mentalModel: { why: 'unresolved', how: 'unresolved' },
     openQuestions: [],
+    trapStates: traps.map((_, i) => ({ id: `t${i + 1}`, status: 'untouched' })),
+    phase: 'reading',
+  }
+}
+
+// 「理解できた」ボタンで読解を終えたときに、チャットに追加する固定メッセージ（AIを呼ばない）。
+export function getUserDeclaredDoneMessage() {
+  return {
+    role: 'bot',
+    content: '了解しました。ここで読解は完了とします。このあとも質問は自由にできます。',
+    step: 'opportunistic',
+    timestamp: new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
   }
 }
 
@@ -97,8 +114,8 @@ export async function sendToGemini({ sessionId, activeCode, currentStep, userMes
 }
 
 // opportunistic条件専用の送信関数。
-// stepの代わりにmentalModelとopenQuestionsを毎回送受信する（サーバーレスなので状態はクライアント側が持つ）。
-export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalModel, openQuestions, userMessage, history }) {
+// stepの代わりに mentalModel / openQuestions / trapStates / phase を毎回送受信する（サーバーレスなので状態はクライアント側が持つ）。
+export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalModel, openQuestions, trapStates, phase, userMessage, history }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -110,6 +127,8 @@ export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalM
       condition: 'opportunistic',
       mentalModel,
       openQuestions,
+      trapStates,
+      phase,
     }),
   })
 
@@ -124,5 +143,7 @@ export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalM
     content: data.reply,
     mentalModel: data.mentalModel ?? mentalModel,
     openQuestions: Array.isArray(data.openQuestions) ? data.openQuestions : openQuestions,
+    trapStates: Array.isArray(data.trapStates) ? data.trapStates : trapStates,
+    phase: data.phase === 'done' ? 'done' : 'reading',
   }
 }

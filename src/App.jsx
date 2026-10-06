@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
-import { STEP_LABELS, getInitialBotMessage, getInitialMentalState, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
+import { STEP_LABELS, getInitialBotMessage, getInitialMentalState, getUserDeclaredDoneMessage, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
 import { generateSessionId, logEvent } from './utils/logger'
 import { resolveCondition, CONDITION_LABELS } from './utils/condition'
 import './styles/global.css'
@@ -288,8 +288,11 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   // opportunistic条件専用の状態。stepの代わりにこちらで進行を管理する。
-  const [mentalModel, setMentalModel] = useState(() => getInitialMentalState().mentalModel)
-  const [openQuestions, setOpenQuestions] = useState(() => getInitialMentalState().openQuestions)
+  // trapStates: 問題の罠（traps）ごとの状態。phase: 'reading'（読解中）| 'done'（完了後。質問は続けられる）。
+  const [mentalModel, setMentalModel] = useState(() => getInitialMentalState(activeCode).mentalModel)
+  const [openQuestions, setOpenQuestions] = useState(() => getInitialMentalState(activeCode).openQuestions)
+  const [trapStates, setTrapStates] = useState(() => getInitialMentalState(activeCode).trapStates)
+  const [readingPhase, setReadingPhase] = useState(() => getInitialMentalState(activeCode).phase)
   // free/opportunistic条件は自己説明を強制する設計ではないので最初から解除。
   // guided条件は summaryステップがadvance:trueになった瞬間に解除する。
   const [resultUnlocked, setResultUnlocked] = useState(condition === 'free' || condition === 'opportunistic')
@@ -327,12 +330,14 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       const history = messages.map(m => ({ role: m.role, content: m.content }))
 
       if (condition === 'opportunistic') {
-        // opportunistic条件はstep進行ではなく mentalModel/openQuestions を毎回送受信して状態を更新する。
+        // opportunistic条件はstep進行ではなく、状態（mentalModel/openQuestions/trapStates/phase）を毎回送受信して更新する。
         const botReply = await sendToGeminiOpportunistic({
           sessionId,
           activeCode,
           mentalModel,
           openQuestions,
+          trapStates,
+          phase: readingPhase,
           userMessage: text,
           history,
         })
@@ -347,7 +352,9 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         setMessages(prev => [...prev, botMessage])
         setMentalModel(botReply.mentalModel)
         setOpenQuestions(botReply.openQuestions)
-        // mentalModel/openQuestions の推移は、サーバーが chat ログに毎回残すので、ここでは別途ログしない。
+        setTrapStates(botReply.trapStates)
+        setReadingPhase(botReply.phase)
+        // 状態の推移や読解の終了・再開は、サーバーが chat / session_complete / session_reopen ログに残すので、ここでは別途ログしない。
       } else {
         const botReply = await sendToGemini({
           sessionId,
@@ -394,6 +401,26 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       e.preventDefault()
       sendMessage()
     }
+  }
+
+  // 「理解できた」ボタン（opportunistic条件）。AIは呼ばず、読解を完了状態にして固定メッセージを追加する。
+  // 完了後も質問は続けられる。終了条件を満たしていなかったかどうか（closed_with_gaps）は、api/log.js がスナップショットから判定して記録する。
+  const userTurns = messages.filter(m => m.role === 'user').length
+  const handleDeclareDone = () => {
+    if (readingPhase !== 'reading' || isLoading || userTurns === 0) return
+    setReadingPhase('done')
+    setMessages(prev => [...prev, getUserDeclaredDoneMessage()])
+    logEvent({
+      sessionId,
+      eventType: 'session_complete',
+      condition,
+      codeId: activeCode.id,
+      turn: userTurns,
+      mentalModel,
+      openQuestions,
+      trapStates,
+    })
+    setTimeout(scrollToBottom, 50)
   }
 
   return (
@@ -457,6 +484,18 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
               <div className="open-questions__mental">
                 why: {mentalModel.why} / how: {mentalModel.how}
               </div>
+              {readingPhase === 'done' ? (
+                <div className="open-questions__mental">✓ 読解完了（このあとも質問はできます）</div>
+              ) : (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleDeclareDone}
+                  disabled={isLoading || userTurns === 0}
+                >
+                  理解できた
+                </button>
+              )}
               {openQuestions.length > 0 && (
                 <ul className="open-questions__list">
                   {openQuestions.map(q => (

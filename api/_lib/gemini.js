@@ -1,11 +1,21 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { buildOpportunisticPrompt } from './opportunisticPrompt.js'
+import {
+  buildTrapList,
+  normalizeTrapStates,
+  sanitizeMentalModel,
+  sanitizeMove,
+  sanitizeOpenQuestions,
+  settleOpportunisticState,
+} from './tutorState.js'
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY
 export const MODEL_NAME = 'gemini-3.1-flash-lite'
 
-// プロンプト（TUTOR_RULES* / STEP_FOCUS / buildSystemPrompt）を変更したときは、この値を手で更新すること。
-// ログに記録され、「どの版のプロンプトで取った会話か」を後から区別できるようにする。形式は日付+アルファベット。
-export const PROMPT_VERSION = '2026-09-29a'
+// プロンプト（TUTOR_RULES* / STEP_FOCUS / buildSystemPrompt / opportunisticPrompt.js）を変更したときは、
+// この値を手で更新すること。ログに記録され、「どの版のプロンプトで取った会話か」を後から区別できるようにする。
+// 形式は日付+アルファベット。
+export const PROMPT_VERSION = '2026-10-06a'
 
 // 汎用フォーカス（コード構造に依存しない書き方）。
 // 特定コード専用の着目観点は codeLibrary.js 側の activeCode.stepFocus[step] で上書きできる。
@@ -89,116 +99,9 @@ const TUTOR_RULES_FREE = `
 {"reply":"ここに返答テキスト"}
 `.trim()
 
-// opportunistic条件用のルール（Letovsky, 1986 の日和見主義モデルを参考にした設計）。
-// 固定ステップ順ではなく、
-//   1. ユーザーの発言中の局所的な手がかり（ボトムアップ割り込み）
-//   2. 保留中の問い(openQuestions)との関連（再訪）
-//   3. 上記が無ければ mentalModel.why / how のうち手薄な方（トップダウン継続）
-// の優先順位で次の一手を選ばせる。返答はreplyに加えてmentalModelとopenQuestionsの
-// 「次の状態そのもの」をJSONで返させる（差分ではなく全体を返させることで、
-// パース失敗時に直前の状態へフォールバックしやすくする）。
-const MAX_OPEN_QUESTIONS = 5
-
-const TUTOR_RULES_OPPORTUNISTIC = `
-あなたはコードリーディングを支援するチューターです。日和見主義的な理解プロセス（Letovskyモデル）を模倣します。
-
-## 状態の見方
-- mentalModel.why: コード全体の意図についてのユーザーの理解度（unresolved/conjectured/confirmed）
-- mentalModel.how: 実現方略（アルゴリズム・処理の流れ）についてのユーザーの理解度（同上）
-- openQuestions: 保留中・進行中の局所的な問い。各要素は
-  { "id": string, "level": "why"|"how"|"what", "target": string, "status": "open"|"deferred"|"resolved" }
-  最大${MAX_OPEN_QUESTIONS}件までしか保持しない。
-
-## 次の一手を選ぶ優先順位
-1. ユーザーの発言が、コード中の具体的な変数・行・処理に自発的に言及している場合、
-   たとえ今扱っている話題と違っても、その言及を捉えて短く深掘りする問いを返してよい。
-   新しい着眼点なら openQuestions に status:"open" で追加する（levelは why/how/what から適切なものを選ぶ）。
-2. ユーザーの発言が、openQuestions内の status:"deferred" な項目と関連しそうな場合、
-   それを取り上げて「さっき保留にしていた〇〇、今の話とつながりそうです」のように再訪する。
-   解決できたと判断したら該当項目の status を "resolved" にする。
-3. 上記いずれにも該当しない場合のみ、mentalModel.why または how のうち unresolved な方について
-   トップダウンに問いかける。両方 confirmed に近ければ、openQuestions の open な項目から選んでよい。
-4. ユーザーが「わからない」「難しい」などで詰まった場合、今扱っている問いを status:"deferred" にする。
-   そのうえで、次の中から最も軽い支援を選ぶ。
-   a. 問いを絞る（move: narrow）：見るべき箇所を1つだけ指し、二択や短い穴埋めで答えられる形に言い換える。
-   b. 小さな入力で追わせる（move: trace）：コード自体は変えず、入力を小さく（3要素程度）して、1手ずつ何が起きるかを追わせる。
-   c. 別の観点へ移る（move: switch）：aやbでも進まない場合、または直前に同種の支援をすでに出している場合は、
-      もう一方のwhy/howや他のopenQuestionsに移る。
-   同じ問い・同じ言い回しを繰り返さない。別のコードを新しく作って示すことはしない。
-5. openQuestionsがすでに${MAX_OPEN_QUESTIONS}件ある場合、新規追加より既存項目の解決・保留判断を優先する。
-6. ユーザーがコードについて指摘や反論をした場合（例：「〇〇なんてなくない？」）、まずコードに照らして正しいかを確認する。
-   正しければ認めたうえで問いを修正する（move: correct）。誤っていれば、コード上の該当箇所を引用して確認を促す。
-
-## 行の指し方
-- 行番号は使わない（ユーザーの画面の行番号と一致する保証がない）。変数名・式・関数名をそのまま引用して指す。
-
-## mentalModelの更新基準
-- unresolved → conjectured：ユーザーが自分の言葉で推測を述べた（正誤は問わない）。
-  名前を繰り返しただけ（例：「バブルソート」とだけ言った）は conjectured 止まり。
-- conjectured → confirmed：ユーザー自身の説明が、下に「参照情報」があればその要点と、無ければコードから自分で判断した内容と一致しており、
-  かつコード上の根拠（変数・処理）への言及を伴うとき。
-- 誤解が見つかったら confirmed や conjectured から戻してよい。
-- 1回の発言で why と how を同時に confirmed にすることは避ける。
-
-## 参照情報の扱い（対象コードの後に「参照情報」がある場合のみ）
-- 参照情報はチューターだけが知る正解と手がかりである。ユーザーには絶対に言わない。文言をそのまま使わない。
-- landmarks：ユーザーがその要素に自発的に触れたときに深掘りに使う。ユーザーが詰まっていないときは、こちらから先に名指ししない。
-  詰まったときに「見るべき場所」を選ぶ候補としては使ってよい。
-- traps：ユーザーの発言にそのつまずきの兆候が見えたときだけ、答えを言わずに気づかせる問いとして使う。
-
-## moveとnote（ログ分析用。ユーザーには見せない）
-- move は今回の返答でどの一手を選んだかを表す。
-  bottom_up（優先順位1）/ revisit（2）/ top_down（3）/ narrow・trace・switch（4）/ correct（6）/ other
-- note は、その一手を選んだ理由を40字以内で書く。
-
-## 絶対に守るルール
-- コードの動作を自分から説明・解説しない
-- 答えや正解を直接言わない
-- 「〜ですね」と相槌だけで終わらない
-- 返答は最大で8文以内に収める
-- 日本語で返答する
-
-## 返答形式（厳守）
-必ず以下のJSON形式だけで返答すること。前後に説明文やマークダウンを付けない。
-{"reply":"ここに返答テキスト","move":"bottom_up|revisit|top_down|narrow|trace|switch|correct|other","note":"理由を40字以内で","mentalModel":{"why":"unresolved|conjectured|confirmed","how":"unresolved|conjectured|confirmed"},"openQuestions":[{"id":"q1","level":"why","target":"...","status":"open"}]}
-`.trim()
-
-// 問題側が持つ「チューターだけが知る情報」(reference / landmarks / traps)を、opportunistic用のプロンプト断片にする。
-// どれも無い場合（ユーザー貼付コードなど）は空文字を返し、AIがコードから自力で判断する。
-function buildReferenceBlock(activeCode) {
-  const { reference, landmarks, traps } = activeCode ?? {}
-  const lines = []
-  if (reference?.why) lines.push(`- why（全体の意図）: ${reference.why}`)
-  if (reference?.how) lines.push(`- how（実現方略）: ${reference.how}`)
-  if (Array.isArray(landmarks) && landmarks.length) {
-    lines.push('- landmarks（ユーザーが自発的に触れたら深掘りする手がかり）:')
-    for (const l of landmarks.slice(0, 5)) {
-      lines.push(typeof l === 'string' ? `  - ${l}` : `  - ${l?.target ?? ''}: ${l?.note ?? ''}`)
-    }
-  }
-  if (Array.isArray(traps) && traps.length) {
-    lines.push('- traps（つまずきやすい点）:')
-    for (const t of traps.slice(0, 5)) lines.push(`  - ${t}`)
-  }
-  if (!lines.length) return ''
-  return `## 参照情報（チューター専用。ユーザーに直接言わない）\n${lines.join('\n')}\n\n`
-}
-
-function buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions }) {
+function buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions, trapStates, phase }) {
   if (condition === 'opportunistic') {
-    return `
-${TUTOR_RULES_OPPORTUNISTIC}
-
-## 対象コード（${activeCode.filename ?? 'code'}）
-言語: ${activeCode.language ?? '不明'}
-\`\`\`
-${activeCode.code}
-\`\`\`
-
-${buildReferenceBlock(activeCode)}## 現在の状態
-mentalModel: ${JSON.stringify(mentalModel ?? { why: 'unresolved', how: 'unresolved' })}
-openQuestions: ${JSON.stringify(openQuestions ?? [])}
-`.trim()
+    return buildOpportunisticPrompt({ activeCode, mentalModel, openQuestions, trapStates, phase })
   }
 
   if (condition === 'free') {
@@ -260,44 +163,6 @@ function toGeminiHistory(history) {
   }))
 }
 
-// opportunistic条件のmentalModelが不正/欠落していた場合のデフォルト値。
-function defaultMentalModel() {
-  return { why: 'unresolved', how: 'unresolved' }
-}
-
-const VALID_STATUS = new Set(['unresolved', 'conjectured', 'confirmed'])
-const VALID_LEVEL = new Set(['why', 'how', 'what'])
-const VALID_Q_STATUS = new Set(['open', 'deferred', 'resolved'])
-const VALID_MOVE = new Set(['bottom_up', 'revisit', 'top_down', 'narrow', 'trace', 'switch', 'correct', 'other'])
-
-// opportunistic条件のログ分析用タグ。不正値・未指定は null（guided/free条件でも null になる）。
-function sanitizeMove(candidate) {
-  return VALID_MOVE.has(candidate) ? candidate : null
-}
-
-// LLMが返したmentalModelを軽くサニタイズする。壊れていれば直前の状態にフォールバック。
-function sanitizeMentalModel(candidate, fallback) {
-  const base = fallback ?? defaultMentalModel()
-  if (!candidate || typeof candidate !== 'object') return base
-  const why = VALID_STATUS.has(candidate.why) ? candidate.why : base.why
-  const how = VALID_STATUS.has(candidate.how) ? candidate.how : base.how
-  return { why, how }
-}
-
-// LLMが返したopenQuestionsを軽くサニタイズする（不正要素は捨て、MAX_OPEN_QUESTIONS件に切り詰め）。
-function sanitizeOpenQuestions(candidate, fallback) {
-  if (!Array.isArray(candidate)) return Array.isArray(fallback) ? fallback : []
-  const cleaned = candidate
-    .filter(q => q && typeof q === 'object' && typeof q.id === 'string' && typeof q.target === 'string')
-    .map(q => ({
-      id: q.id,
-      level: VALID_LEVEL.has(q.level) ? q.level : 'what',
-      target: String(q.target).slice(0, 200),
-      status: VALID_Q_STATUS.has(q.status) ? q.status : 'open',
-    }))
-  return cleaned.slice(0, MAX_OPEN_QUESTIONS)
-}
-
 // --- 一時的なエラーのリトライ ---
 // 503(高負荷) / 429(レート制限) / 500・502・504 / 通信エラーは一時的なことが多いので、短く待って再試行する。
 // 400(不正なリクエスト)や認証エラーなどは再試行しても直らないので、そのまま投げる。
@@ -342,72 +207,120 @@ async function sendWithRetry(createChat, userMessage) {
   }
 }
 
-export async function askGemini({ activeCode, currentStep, userMessage, history, condition, mentalModel, openQuestions }) {
+// モデルの返答テキストから JSON を取り出す。
+// free/opportunistic条件は "advance" を持たないため、"reply" の有無だけに依存する形で抽出する。
+// 失敗時は { parseFailed: true, reply: 生テキスト }。
+function parseReply(raw) {
+  const jsonMatch = raw.match(/\{[\s\S]*"reply"[\s\S]*\}/)
+  if (!jsonMatch) {
+    console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
+    return { parseFailed: true, reply: raw.trim() }
+  }
+  try {
+    return { parseFailed: false, parsed: JSON.parse(jsonMatch[0]) }
+  } catch (e) {
+    console.warn('[gemini] JSONパース失敗:', e.message, 'raw:', raw)
+    return { parseFailed: true, reply: raw.trim() }
+  }
+}
+
+export async function askGemini({
+  activeCode, currentStep, userMessage, history, condition,
+  mentalModel, openQuestions, trapStates, phase,
+}) {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。環境変数を確認してください。')
   }
 
-  const t0 = Date.now()
+  // クライアントから受け取った状態は信用せず、整えてから使う（guided/free条件では使われないが、形は揃える）。
+  const isOpportunistic = condition === 'opportunistic'
+  const trapList = isOpportunistic ? buildTrapList(activeCode) : []
+  const prev = {
+    mentalModel: sanitizeMentalModel(mentalModel, null),
+    openQuestions: sanitizeOpenQuestions(openQuestions, []),
+    trapStates: normalizeTrapStates(trapStates, trapList),
+    phase: isOpportunistic && phase === 'done' ? 'done' : 'reading',
+  }
+
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
   const model = genAI.getGenerativeModel({
     model: MODEL_NAME,
-    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions }),
+    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition, ...prev }),
   })
-  const geminiHistory = toGeminiHistory(history)
-  const createChat = () => model.startChat({ history: geminiHistory })
-  const chatReadyMs = Date.now() - t0
 
-  // apiCallMs にはリトライの待ち時間も含まれる。リトライ回数は retries で別に記録する。
+  let chatHistory = toGeminiHistory(history)
+  let messageToSend = userMessage
+  let retries = 0
+  let regenerated = false
+  let attempt = null
+  let settled = null
+
+  // apiCallMs にはリトライの待ち時間・再生成の時間も含まれる。リトライ回数は retries、再生成の有無は regenerated で別に記録する。
   const apiT0 = Date.now()
-  const { result, retries } = await sendWithRetry(createChat, userMessage)
+  for (let pass = 0; pass < 2; pass++) {
+    const historyForPass = chatHistory
+    const { result, retries: passRetries } = await sendWithRetry(
+      () => model.startChat({ history: historyForPass }),
+      messageToSend,
+    )
+    retries += passRetries
+    const raw = result.response.text()
+    attempt = parseReply(raw)
+    if (!isOpportunistic || attempt.parseFailed) break
+
+    settled = settleOpportunisticState({ parsed: attempt.parsed, prev, trapList })
+
+    // モデルが「終了」と申告したが、状態が終了条件を満たしていない場合（締めくくりの返答になっているのに終わっていない）は、
+    // 1回だけ作り直させる。2回目は結果をそのまま採用する（その場合 phase は reading のままで、拒否理由がログに残る）。
+    const rejectedDone = attempt.parsed.done === true && prev.phase === 'reading' && settled.completionRejected
+    if (!rejectedDone || pass === 1) break
+
+    regenerated = true
+    chatHistory = [
+      ...chatHistory,
+      { role: 'user', parts: [{ text: messageToSend }] },
+      { role: 'model', parts: [{ text: raw }] },
+    ]
+    messageToSend =
+      `[システム通知] 読解の終了条件を満たしていません（${settled.completionRejected.join('、')}）。` +
+      '直前の締めくくりの返答は取り消します。done を false にして、読解中の優先順位に従い、' +
+      'ユーザーの最初の発言への返答として次の問いを返し直してください。'
+  }
   const apiCallMs = Date.now() - apiT0
 
-  const raw = result.response.text()
-
-  // free/opportunistic条件は "advance" を持たないため、"reply" の有無だけに依存する形で抽出する。
-  const jsonMatch = raw.match(/\{[\s\S]*"reply"[\s\S]*\}/)
-  if (!jsonMatch) {
-    console.warn('[gemini] JSON形式で返答されませんでした。raw:', raw)
+  if (attempt.parseFailed) {
+    // 解析に失敗した場合は、生テキストを返答にして、状態は直前のものを維持する。
     return {
-      reply: raw.trim(),
+      reply: attempt.reply,
       parseFailed: true,
       retries,
+      regenerated,
       advance: false,
-      mentalModel: sanitizeMentalModel(null, mentalModel),
-      openQuestions: sanitizeOpenQuestions(null, openQuestions),
-      chatReadyMs,
+      ...prev,
+      phaseEvent: null,
+      done: false,
+      completionRejected: null,
       apiCallMs,
     }
   }
 
-  try {
-    const parsed = JSON.parse(jsonMatch[0])
+  const { parsed } = attempt
+  const common = {
+    reply: String(parsed.reply ?? '').trim(),
     // free条件にはadvanceの概念が無いのでtrue固定としておく（フロント側では使用しない）。
-    const advance = condition === 'free' ? true : parsed.advance === true
-    return {
-      reply: String(parsed.reply ?? '').trim(),
-      advance,
-      move: sanitizeMove(parsed.move),
-      note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
-      parseFailed: false,
-      retries,
-      // guided/free条件では常に空の状態を返すだけで、フロント側は無視して構わない。
-      mentalModel: sanitizeMentalModel(parsed.mentalModel, mentalModel),
-      openQuestions: sanitizeOpenQuestions(parsed.openQuestions, openQuestions),
-      chatReadyMs,
-      apiCallMs,
-    }
-  } catch (e) {
-    console.warn('[gemini] JSONパース失敗:', e.message, 'raw:', raw)
-    return {
-      reply: raw.trim(),
-      parseFailed: true,
-      retries,
-      advance: false,
-      mentalModel: sanitizeMentalModel(null, mentalModel),
-      openQuestions: sanitizeOpenQuestions(null, openQuestions),
-      chatReadyMs,
-      apiCallMs,
-    }
+    advance: condition === 'free' ? true : parsed.advance === true,
+    move: sanitizeMove(parsed.move),
+    note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
+    parseFailed: false,
+    retries,
+    regenerated,
+    apiCallMs,
   }
+
+  if (!isOpportunistic) {
+    // guided/free条件では状態を使わない。形を揃えるために直前の状態をそのまま返す（フロント側は無視する）。
+    return { ...common, ...prev, phaseEvent: null, done: false, completionRejected: null }
+  }
+
+  return { ...common, ...settled }
 }

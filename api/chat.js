@@ -32,7 +32,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { activeCode, currentStep, userMessage, history, condition, mentalModel, openQuestions } = req.body ?? {}
+    const {
+      activeCode, currentStep, userMessage, history, condition,
+      mentalModel, openQuestions, trapStates, phase,
+    } = req.body ?? {}
 
     if (!activeCode?.code || !userMessage) {
       return res.status(400).json({ error: 'activeCode.code と userMessage は必須です。' })
@@ -40,8 +43,9 @@ export default async function handler(req, res) {
 
     const t0 = Date.now()
     const {
-      reply, advance, move, note, retries, parseFailed,
-      mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, apiCallMs,
+      reply, advance, move, note, retries, regenerated, parseFailed,
+      mentalModel: nextMentalModel, openQuestions: nextOpenQuestions, trapStates: nextTrapStates,
+      phase: nextPhase, phaseEvent, done, completionRejected, apiCallMs,
     } = await askGemini({
       activeCode,
       currentStep,
@@ -50,15 +54,19 @@ export default async function handler(req, res) {
       condition,
       mentalModel,
       openQuestions,
+      trapStates,
+      phase,
     })
     const totalMs = Date.now() - t0
 
+    const context = buildLogContext(req.body)
+
     // チャットの往復をSupabaseに保存（本番ではVercel Logsではなくこちらを一次ソースにする）
-    // opportunistic条件ではmentalModel/openQuestionsのスナップショット（この返答の「後」の状態）も残し、
+    // opportunistic条件ではmentalModel/openQuestions/trapStatesのスナップショット（この返答の「後」の状態）も残し、
     // 保留→解決の推移や再訪の頻度を後からログだけで追えるようにする。
     // guidedのステップ遷移は currentStep（送信時点）と advance から導出できるので、step_change は別に残さない。
     await insertLog({
-      ...buildLogContext(req.body),
+      ...context,
       eventType: 'chat',
       userMessage,
       reply,
@@ -67,13 +75,48 @@ export default async function handler(req, res) {
       note,
       parseFailed,
       retries,
+      regenerated,
       mentalModel: nextMentalModel,
       openQuestions: nextOpenQuestions,
+      trapStates: nextTrapStates,
+      phase: nextPhase,
+      phaseEvent,
+      done,
+      completionRejected,
       totalMs,
       apiCallMs,
     })
 
-    return res.status(200).json({ reply, advance, mentalModel: nextMentalModel, openQuestions: nextOpenQuestions })
+    // 読解の終了・再開は、後から「何ターンで終わったか」を集計できるよう独立したイベントにも残す。
+    // （ユーザーが「理解できた」ボタンで終えた場合は、クライアントが /api/log 経由で session_complete を送る）
+    if (phaseEvent === 'complete') {
+      await insertLog({
+        ...context,
+        eventType: 'session_complete',
+        reason: 'system',
+        gaps: [],
+        mentalModel: nextMentalModel,
+        openQuestions: nextOpenQuestions,
+        trapStates: nextTrapStates,
+      })
+    } else if (phaseEvent === 'reopen') {
+      await insertLog({
+        ...context,
+        eventType: 'session_reopen',
+        mentalModel: nextMentalModel,
+        openQuestions: nextOpenQuestions,
+        trapStates: nextTrapStates,
+      })
+    }
+
+    return res.status(200).json({
+      reply,
+      advance,
+      mentalModel: nextMentalModel,
+      openQuestions: nextOpenQuestions,
+      trapStates: nextTrapStates,
+      phase: nextPhase,
+    })
   } catch (error) {
     console.error('[api/chat error]', error)
 

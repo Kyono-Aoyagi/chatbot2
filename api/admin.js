@@ -108,7 +108,7 @@ export default async function handler(req, res) {
   const { data, error } = await supabase
     .from('chat_logs')
     .select('*')
-    .in('event_type', ['session_start', 'chat', 'chat_error'])
+    .in('event_type', ['session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen'])
     .order('created_at', { ascending: false })
     .limit(LIST_FETCH_LIMIT)
   if (error) return res.status(500).send(`Query failed: ${escapeHtml(error.message)}`)

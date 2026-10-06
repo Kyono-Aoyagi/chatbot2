@@ -36,6 +36,8 @@ const MOVE_META = {
   trace: { label: '小入力で追う', color: '#c9a400' },
   switch: { label: '観点を移す', color: '#8a4fd6' },
   correct: { label: '指摘対応', color: '#d6456b' },
+  wrap_up: { label: '終了', color: '#1f7a8c' },
+  answer: { label: '直接回答', color: '#5c6bc0' },
   other: { label: 'その他', color: '#999999' },
 }
 
@@ -73,21 +75,23 @@ export function groupSessions(rows) {
 
   for (const row of sorted) {
     if (!row.session_id) continue
-    if (!['session_start', 'chat', 'chat_error'].includes(row.event_type)) continue
+    if (!['session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen'].includes(row.event_type)) continue
     if (!map.has(row.session_id)) {
-      map.set(row.session_id, { id: row.session_id, start: null, startRow: null, chats: [], errors: [] })
+      map.set(row.session_id, { id: row.session_id, start: null, startRow: null, chats: [], errors: [], completes: [], reopens: [] })
     }
     const s = map.get(row.session_id)
     if (row.event_type === 'session_start') { s.start = row.payload ?? {}; s.startRow = row }
     else if (row.event_type === 'chat') s.chats.push(row)
-    else s.errors.push(row)
+    else if (row.event_type === 'chat_error') s.errors.push(row)
+    else if (row.event_type === 'session_complete') s.completes.push(row)
+    else s.reopens.push(row)
   }
 
   return [...map.values()].map(summarizeSession).sort((a, b) => b.startedAtMs - a.startedAtMs)
 }
 
 function summarizeSession(s) {
-  const allRows = [s.startRow, ...s.chats, ...s.errors].filter(Boolean)
+  const allRows = [s.startRow, ...s.chats, ...s.errors, ...s.completes, ...s.reopens].filter(Boolean)
   const times = allRows.map(r => new Date(r.created_at).getTime())
   const startedAtMs = Math.min(...times)
   const lastAtMs = Math.max(...times)
@@ -125,6 +129,11 @@ function summarizeSession(s) {
     // guided/free の chat ログにも既定の mentalModel が入るため、opportunistic 以外では状態を出さない。
     finalMental: condition === 'opportunistic' ? (lastChat?.mentalModel ?? null) : null,
     lastStep: lastChat?.currentStep ?? null,
+    // 読解の終了（最初の1件）と再開の回数。reason: system | user_declared | closed_with_gaps
+    completion: s.completes[0]
+      ? { reason: s.completes[0].payload?.reason ?? null, turn: s.completes[0].payload?.turn ?? null, gaps: s.completes[0].payload?.gaps ?? [] }
+      : null,
+    reopens: s.reopens.length,
   }
 }
 
@@ -159,6 +168,8 @@ const CSS = `
   .badge--unknown { color: #999; }
   .badge--warn { background: #fff0c2; color: #6b4b00; }
   .badge--err { background: #ffd6d6; color: #8a0000; }
+  .badge--done { background: #d7f5e3; color: #0f6b3a; }
+  .complete-box { margin-left: 8%; background: #e8f7ee; border: 1px solid #a8d8bb; color: #0f6b3a; border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
   .notice { color: #b00020; }
   .chip { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 3px; vertical-align: middle; }
   .chip--none { background: #ddd; }
@@ -214,6 +225,22 @@ function notConfiguredNotice(configured) {
 
 // ---------- セッション一覧 ----------
 
+const COMPLETE_REASON_LABEL = {
+  system: 'AI判定',
+  user_declared: '自己申告',
+  closed_with_gaps: '自己申告（未解決あり）',
+}
+
+// 「終了」列。読解の終了は opportunistic 条件だけの概念なので、他の条件は '-'。
+function completionCell(s) {
+  if (s.condition !== 'opportunistic') return '-'
+  if (!s.completion) return '<small>未完了</small>'
+  const label = COMPLETE_REASON_LABEL[s.completion.reason] ?? s.completion.reason ?? '-'
+  const turn = s.completion.turn != null ? `<br><small>${escapeHtml(s.completion.turn)}ターン目</small>` : ''
+  const reopen = s.reopens ? `<br><small>再開 ${s.reopens}回</small>` : ''
+  return `${escapeHtml(label)}${turn}${reopen}`
+}
+
 export function renderSessionList({ sessions, filters, options, truncated, configured }) {
   const legend = Object.values(MOVE_META)
     .map(m => `<span><span class="chip" style="background:${m.color}"></span>${escapeHtml(m.label)}</span>`)
@@ -255,6 +282,7 @@ export function renderSessionList({ sessions, filters, options, truncated, confi
       <td>${escapeHtml(s.title)}${s.difficulty ? `<br><small>難易度 ${escapeHtml(s.difficulty)}</small>` : ''}</td>
       <td>${conditionBadge(s.condition)}</td>
       <td>${s.turns}</td>
+      <td>${completionCell(s)}</td>
       <td>${escapeHtml(fmtDuration(s.durationMs))}</td>
       <td>${progress}</td>
       <td class="band">${band}</td>
@@ -271,7 +299,7 @@ export function renderSessionList({ sessions, filters, options, truncated, confi
     <p class="meta">${sessions.length}セッション表示中${truncated ? '（直近のイベントのみ集計。古いセッションは一部欠けている可能性があります）' : ''}</p>
     <table>
       <thead>
-        <tr><th>開始</th><th>問題</th><th>mode</th><th>ターン</th><th>所要</th><th>最終状態</th><th>道筋（move）</th><th>問題点</th><th>プロンプト版</th><th></th></tr>
+        <tr><th>開始</th><th>問題</th><th>mode</th><th>ターン</th><th>終了</th><th>所要</th><th>最終状態</th><th>道筋（move）</th><th>問題点</th><th>プロンプト版</th><th></th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`
@@ -310,20 +338,44 @@ function renderQuestionDiff(prevList, nextList) {
   return items.length ? `<ul>${items.join('')}</ul>` : ''
 }
 
+// 罠（trapStates）の変化。変化があった罠だけを出す。
+function renderTrapDiff(prevList, nextList) {
+  const prevMap = new Map((prevList ?? []).map(t => [t.id, t.status]))
+  const items = (nextList ?? [])
+    .filter(t => (prevMap.get(t.id) ?? 'untouched') !== t.status)
+    .map(t => `<li class="changed">罠 ${escapeHtml(t.id)}：${escapeHtml(prevMap.get(t.id) ?? 'untouched')} → ${escapeHtml(t.status)}</li>`)
+  return items.length ? `<ul>${items.join('')}</ul>` : ''
+}
+
 // summary: summarizeSession の結果（groupSessions 経由で得たもの）
 // rows: そのセッションの chat_logs 行（順不同でよい）
 export function renderSessionDetail({ sessionId, summary, rows, configured }) {
   const events = [...rows]
-    .filter(r => r.event_type === 'chat' || r.event_type === 'chat_error')
+    .filter(r => r.event_type === 'chat' || r.event_type === 'chat_error' ||
+      (r.event_type === 'session_complete' && r.payload?.reason !== 'system'))
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
 
   let prevMental = INITIAL_MENTAL
   let prevQuestions = []
+  let prevTraps = []
   let counter = 0
 
   const turns = events.map(row => {
     const p = row.payload ?? {}
     const time = escapeHtml(fmtTime(row.created_at))
+
+    if (row.event_type === 'session_complete') {
+      // 「理解できた」ボタンによる終了（AI判定による終了は、chat の行に印を出すのでここでは出さない）
+      const gaps = Array.isArray(p.gaps) ? p.gaps : []
+      return `
+      <div class="turn">
+        <div class="turn-label">${time}</div>
+        <div class="complete-box">
+          ✓ 「理解できた」で読解を終了（${escapeHtml(COMPLETE_REASON_LABEL[p.reason] ?? p.reason ?? '-')}・${escapeHtml(p.turn ?? '-')}ターン後）
+          ${gaps.length ? `<br><small>${gaps.map(escapeHtml).join(' / ')}</small>` : ''}
+        </div>
+      </div>`
+    }
 
     if (row.event_type === 'chat_error') {
       return `
@@ -346,12 +398,19 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
     }
     if (p.parseFailed) metaParts.push('<span class="badge badge--warn">JSON解析失敗</span>')
     if (p.retries) metaParts.push(`<span class="badge badge--warn">リトライ ${escapeHtml(p.retries)}回</span>`)
+    if (p.regenerated) metaParts.push('<span class="badge badge--warn">終了申告を却下して再生成</span>')
+    if (p.completionRejected) {
+      metaParts.push(`<span class="badge badge--warn" title="${escapeHtml(p.completionRejected.join(' / '))}">終了/再開の申告を却下</span>`)
+    }
+    if (p.phaseEvent === 'complete') metaParts.push('<span class="badge badge--done">✓ 読解完了（AI判定）</span>')
+    if (p.phaseEvent === 'reopen') metaParts.push('<span class="badge badge--warn">↩ 読解に復帰</span>')
 
     let stateHtml = ''
     if (isOpp && p.mentalModel) {
-      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderQuestionDiff(prevQuestions, p.openQuestions)}</div>`
+      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
       prevMental = p.mentalModel
       prevQuestions = p.openQuestions ?? []
+      prevTraps = p.trapStates ?? []
     }
 
     return `
@@ -387,7 +446,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
 // ---------- 生ログ（従来の表） ----------
 
 export function renderRawPage({ rows, eventType, sessionId, condition, limit, configured }) {
-  const eventTypes = ['session_start', 'chat', 'chat_error', 'result_shown', 'step_change', 'mental_state_change']
+  const eventTypes = ['session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen', 'result_shown', 'step_change', 'mental_state_change']
 
   const form = `
     <form method="GET" class="filters">
