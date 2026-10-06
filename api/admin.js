@@ -1,7 +1,18 @@
 import { getSupabase } from './_lib/supabase.js'
+import {
+  escapeHtml,
+  groupSessions,
+  renderRawPage,
+  renderSessionDetail,
+  renderSessionList,
+} from './_lib/adminView.js'
 
 const ADMIN_USER = process.env.ADMIN_USER
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
+
+// セッション一覧の集計に使うイベント数の上限。
+// Supabase(PostgREST)は1リクエストで最大1000行までしか返さないため、これが実質の上限になる。
+const LIST_FETCH_LIMIT = 1000
 
 function checkBasicAuth(req) {
   // ADMIN_USER/ADMIN_PASSWORDが未設定なら、事故防止のため管理画面ごとアクセス拒否にする
@@ -19,153 +30,105 @@ function checkBasicAuth(req) {
   return user === ADMIN_USER && pass === ADMIN_PASSWORD
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+function sendHtml(res, html, status = 200) {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  return res.status(status).send(html)
 }
 
-// row.payload.condition ('guided' | 'free') を人間向けラベル・バッジに変換する。
-// session_start / chat イベントは condition を直接持つ。
-// step_change / result_shown など condition を持たないイベントは '-' 表示にする。
-const CONDITION_LABELS = {
-  guided: '段階的ガイド',
-  free: '自由質問',
-  opportunistic: '日和見（パイロット）',
-}
-
-function renderConditionBadge(condition) {
-  if (!CONDITION_LABELS[condition]) {
-    return '<span class="badge badge--unknown">-</span>'
-  }
-  return `<span class="badge badge--${condition}">${escapeHtml(CONDITION_LABELS[condition])}</span>`
-}
-
-function renderPage({ rows, eventType, sessionId, condition, limit, configured }) {
-  const filterForm = `
-    <form method="GET" class="filters">
-      <label>event_type
-        <select name="event_type">
-          <option value="">(all)</option>
-          ${['session_start', 'step_change', 'chat', 'chat_error', 'mental_state_change'].map(t =>
-            `<option value="${t}" ${t === eventType ? 'selected' : ''}>${t}</option>`
-          ).join('')}
-        </select>
-      </label>
-      <label>mode
-        <select name="condition">
-          <option value="">(all)</option>
-          ${['guided', 'free', 'opportunistic'].map(c =>
-            `<option value="${c}" ${c === condition ? 'selected' : ''}>${CONDITION_LABELS[c]}</option>`
-          ).join('')}
-        </select>
-      </label>
-      <label>session_id
-        <input type="text" name="session_id" value="${escapeHtml(sessionId)}" placeholder="sess_...">
-      </label>
-      <label>limit
-        <input type="number" name="limit" value="${limit}" min="1" max="1000">
-      </label>
-      <button type="submit">絞り込み</button>
-    </form>
-  `
-
-  const tableRows = rows.map(row => `
-    <tr>
-      <td>${escapeHtml(new Date(row.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }))}</td>
-      <td>${escapeHtml(row.session_id)}</td>
-      <td><span class="badge badge--${escapeHtml(row.event_type)}">${escapeHtml(row.event_type)}</span></td>
-      <td>${renderConditionBadge(row.payload?.condition)}</td>
-      <td><pre>${escapeHtml(JSON.stringify(row.payload, null, 2))}</pre></td>
-    </tr>
-  `).join('')
-
-  const notConfiguredNotice = configured ? '' : `
-    <p class="notice">SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY が未設定です。環境変数を設定してください。</p>
-  `
-
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>ログ管理画面</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f7f7f8; color: #1a1a1a; }
-    h1 { font-size: 20px; margin-bottom: 16px; }
-    .filters { display: flex; gap: 16px; align-items: flex-end; margin-bottom: 20px; flex-wrap: wrap; }
-    .filters label { display: flex; flex-direction: column; font-size: 12px; color: #555; gap: 4px; }
-    .filters input, .filters select { padding: 6px 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
-    .filters button { padding: 7px 16px; font-size: 14px; border: none; border-radius: 4px; background: #1a1a1a; color: white; cursor: pointer; }
-    table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #eee; vertical-align: top; }
-    th { background: #efefef; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; max-width: 480px; font-size: 12px; }
-    .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #e0e0e0; }
-    .badge--chat { background: #d7ecff; }
-    .badge--session_start { background: #dcf5df; }
-    .badge--step_change { background: #fff3cf; }
-    .badge--guided { background: #ffe1c2; color: #7a3e00; font-weight: 600; }
-    .badge--free { background: #e3d9ff; color: #3d1a8a; font-weight: 600; }
-    .badge--opportunistic { background: #d7f5e3; color: #0f6b3a; font-weight: 600; }
-    .badge--unknown { color: #999; }
-    .notice { color: #b00020; }
-    .meta { color: #666; font-size: 12px; margin-bottom: 12px; }
-  </style>
-</head>
-<body>
-  <h1>チャットボット ログ管理画面</h1>
-  ${notConfiguredNotice}
-  ${filterForm}
-  <p class="meta">${rows.length}件表示中</p>
-  <table>
-    <thead>
-      <tr><th>日時</th><th>session_id</th><th>event_type</th><th>mode</th><th>payload</th></tr>
-    </thead>
-    <tbody>
-      ${tableRows}
-    </tbody>
-  </table>
-</body>
-</html>`
-}
-
+// 画面の種類:
+//   (既定)            セッション一覧
+//   ?session_id=...   そのセッションの会話ビュー
+//   ?view=raw         従来の生ログ表（event_type / mode / session_id で絞り込み）
 export default async function handler(req, res) {
   if (!checkBasicAuth(req)) {
     res.setHeader('WWW-Authenticate', 'Basic realm="Admin"')
     return res.status(401).send('Authentication required.')
   }
 
+  const q = req.query ?? {}
   const supabase = getSupabase()
-  const eventType = req.query?.event_type ?? ''
-  const sessionId = req.query?.session_id ?? ''
-  const condition = req.query?.condition ?? ''
-  const limit = Math.min(Number(req.query?.limit) || 100, 1000)
+  const isRaw = q.view === 'raw'
+  const sessionId = q.session_id ?? ''
+
+  // ---- 生ログ ----
+  if (isRaw) {
+    const eventType = q.event_type ?? ''
+    const condition = q.condition ?? ''
+    const limit = Math.min(Number(q.limit) || 100, 1000)
+
+    if (!supabase) {
+      return sendHtml(res, renderRawPage({ rows: [], eventType, sessionId, condition, limit, configured: false }))
+    }
+
+    let query = supabase.from('chat_logs').select('*').order('created_at', { ascending: false }).limit(limit)
+    if (eventType) query = query.eq('event_type', eventType)
+    if (sessionId) query = query.eq('session_id', sessionId)
+    // payload はJSONB列。 ->> でテキストとして条件を絞り込む。
+    // step_change等 condition を持たないイベントは、この絞り込みでは出てこない点に注意。
+    if (condition) query = query.eq('payload->>condition', condition)
+
+    const { data, error } = await query
+    if (error) return res.status(500).send(`Query failed: ${escapeHtml(error.message)}`)
+    return sendHtml(res, renderRawPage({ rows: data ?? [], eventType, sessionId, condition, limit, configured: true }))
+  }
+
+  // ---- 会話ビュー ----
+  if (sessionId) {
+    if (!supabase) {
+      return sendHtml(res, renderSessionDetail({ sessionId, summary: null, rows: [], configured: false }))
+    }
+
+    const { data, error } = await supabase
+      .from('chat_logs')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true })
+      .limit(1000)
+    if (error) return res.status(500).send(`Query failed: ${escapeHtml(error.message)}`)
+
+    const rows = data ?? []
+    const summary = groupSessions(rows)[0] ?? null
+    return sendHtml(res, renderSessionDetail({ sessionId, summary, rows, configured: true }))
+  }
+
+  // ---- セッション一覧 ----
+  const filters = {
+    condition: q.condition ?? '',
+    codeId: q.code_id ?? '',
+    promptVersion: q.prompt_version ?? '',
+    showEmpty: q.show_empty === '1',
+  }
 
   if (!supabase) {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8')
-    return res.status(200).send(renderPage({ rows: [], eventType, sessionId, condition, limit, configured: false }))
+    return sendHtml(res, renderSessionList({
+      sessions: [], filters, options: { codes: [], versions: [] }, truncated: false, configured: false,
+    }))
   }
 
-  let query = supabase
+  const { data, error } = await supabase
     .from('chat_logs')
     .select('*')
+    .in('event_type', ['session_start', 'chat', 'chat_error'])
     .order('created_at', { ascending: false })
-    .limit(limit)
+    .limit(LIST_FETCH_LIMIT)
+  if (error) return res.status(500).send(`Query failed: ${escapeHtml(error.message)}`)
 
-  if (eventType) query = query.eq('event_type', eventType)
-  if (sessionId) query = query.eq('session_id', sessionId)
-  // payload はJSONB列。 ->> でテキストとして条件(guided/free)を絞り込む。
-  // step_change等 condition を持たないイベントはこの絞り込みでは出てこない点に注意。
-  if (condition) query = query.eq('payload->>condition', condition)
+  const rows = data ?? []
+  const all = groupSessions(rows)
 
-  const { data, error } = await query
-
-  if (error) {
-    return res.status(500).send(`Query failed: ${escapeHtml(error.message)}`)
+  // 絞り込みの選択肢は、絞り込み前の全セッションから作る
+  const options = {
+    codes: [...new Set(all.map(s => s.codeId).filter(Boolean))].sort(),
+    versions: [...new Set(all.map(s => s.promptVersion).filter(Boolean))].sort(),
   }
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  return res.status(200).send(renderPage({ rows: data ?? [], eventType, sessionId, condition, limit, configured: true }))
+  const sessions = all.filter(s =>
+    (filters.showEmpty || s.turns > 0 || s.errors > 0)
+    && (!filters.condition || s.condition === filters.condition)
+    && (!filters.codeId || s.codeId === filters.codeId)
+    && (!filters.promptVersion || s.promptVersion === filters.promptVersion))
+
+  return sendHtml(res, renderSessionList({
+    sessions, filters, options, truncated: rows.length >= LIST_FETCH_LIMIT, configured: true,
+  }))
 }

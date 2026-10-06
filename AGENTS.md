@@ -57,14 +57,20 @@
 - `api/chat.js`
   - `POST /api/chat`。必須は `activeCode.code` と `userMessage`。
   - 受け取る: `activeCode, currentStep, userMessage, history, sessionId, condition, mentalModel, openQuestions`
-  - `askGemini()` を呼び、結果を Supabase にログ保存（`insertLog`）して返す。ログには `condition, currentStep, userMessage, reply, advance, move, note, retries, mentalModel, openQuestions, totalMs, chatReadyMs, apiCallMs` が入る。
+  - `askGemini()` を呼び、結果を Supabase にログ保存（`insertLog`）して返す。
+    `chat` ログには `condition, currentStep, codeId, turn, promptVersion, model, userMessage, reply, advance, move, note, parseFailed, retries, mentalModel, openQuestions, totalMs, apiCallMs` が入る（`buildLogContext()` が共通項目を作る。`turn` は history 中の user 発言数+1）。
   - クライアントに返すのは `reply, advance, mentalModel, openQuestions` のみ（`move` / `note` / `retries` はログ専用で返さない）。
   - Gemini 呼び出しが失敗した場合は `chat_error` イベントをログに残す（`transient` / `retries` / `errorMessage`）。
     一時的なエラー（リトライ後も失敗）は HTTP 503 と `code: 'model_busy'`・利用者向けの案内文を返し、生のエラー文は返さない。それ以外は従来どおり 500 とエラー文を返す。
-- `api/log.js`: `POST /api/log`。クライアントからのイベント（`session_start` / `step_change` / `mental_state_change` / `result_shown`）を Supabase に保存。
-- `api/admin.js`: `/api/admin`。ログ閲覧用の管理画面（Basic 認証。`ADMIN_USER` / `ADMIN_PASSWORD` が未設定なら全員拒否）。
-  event_type・mode（`payload.condition`）・session_id で絞り込める。`payload` は JSON をそのまま表示する。
-  `step_change` など `condition` を持たないイベントは mode で絞ると出てこない。
+- `api/log.js`: `POST /api/log`。クライアントからのイベント（`session_start` / `result_shown`）を Supabase に保存。
+  `session_start` には `codeId, source, title, difficulty, tags, condition` が入る（ユーザー貼付コードは title 以外が無く、コード本文は保存しない）。
+- `api/admin.js`: `/api/admin`。ログ閲覧用の管理画面（Basic 認証。`ADMIN_USER` / `ADMIN_PASSWORD` が未設定なら全員拒否）。認証・データ取得・画面の振り分けだけを持つ。
+  - 既定: **セッション一覧**（1行=1セッション。問題、mode、ターン数、所要時間、最終の why/how、`move` の色付き帯、エラー/リトライ/解析失敗、プロンプト版）。
+    mode・問題・プロンプト版で絞り込める。ターン0のセッションは既定で隠す。直近1000イベントから集計する（Supabase の1リクエスト上限）ため、古いセッションは欠けうる。
+  - `?session_id=...`: **会話ビュー**。発言と返答をチャット風に並べ、`move` / `note`、`mentalModel` / `openQuestions` の変化（差分）を各ターンに表示する。生 JSON は折りたたみ。
+  - `?view=raw`: 従来の生ログ表（event_type / mode / session_id で絞り込み。`payload` を JSON のまま表示）。
+- `api/_lib/adminView.js`: 管理画面の HTML 生成とセッション集計（`groupSessions()`）。DB には触れない純粋関数。`CONDITION_LABELS` と `move` の色/ラベル（`MOVE_META`）もここ。
+  ログに由来する文字列は必ず `escapeHtml` を通すこと。guided/free の `chat` ログにも既定の `mentalModel` が入るため、状態・`move` の帯は opportunistic のときだけ表示する。
 - `api/_lib/gemini.js`: Gemini 呼び出し本体。詳細は次節。
 - `api/_lib/supabase.js`: Supabase クライアントと `insertLog()`。`chat_logs` テーブルに `session_id` / `event_type` / `payload`（JSONB）を保存する。未設定時は `console.log` にフォールバック。`payload` は JSONB なので、ログに新しいフィールドを足してもテーブル変更は不要。
 
@@ -77,7 +83,9 @@
   - free: `TUTOR_RULES_FREE` + 対象コード
   - opportunistic: `TUTOR_RULES_OPPORTUNISTIC` + 対象コード + 参照情報（`buildReferenceBlock()`。あれば）+ 現在の `mentalModel` / `openQuestions`
 - 返答は JSON。guided は `{reply, advance}`、free は `{reply}`、opportunistic は `{reply, move, note, mentalModel, openQuestions}`。
-  JSON でなかった／パースに失敗した場合は、生テキストを `reply` にして `advance: false`、状態は直前のものを維持する（この場合 `move` は付かない）。
+  JSON でなかった／パースに失敗した場合は、生テキストを `reply` にして `advance: false`、状態は直前のものを維持する（この場合 `move` は付かず、`parseFailed: true` になる）。
+- `MODEL_NAME` と `PROMPT_VERSION` を export している。**プロンプト（`TUTOR_RULES*` / `STEP_FOCUS` / `buildSystemPrompt()`）を変えたら `PROMPT_VERSION` を手で更新すること。**
+  `chat` ログに記録され、管理画面でプロンプト版ごとに会話を比べられる。
 - **一時的なエラーはサーバー側でリトライする**（`sendWithRetry()`）。対象は 503 / 429 / 500 / 502 / 504 と通信エラー。
   最大2回（1秒後・2秒後）で、経過時間が `RETRY_BUDGET_MS`（8秒）を超えるなら打ち切る。400 や認証エラーはリトライしない。
   試行ごとに `chat` を作り直す。`apiCallMs` にはリトライの待ち時間も含まれ、リトライ回数は `retries` に記録される。
@@ -123,9 +131,12 @@ api/chat.js -> insertLog -> Supabase chat_logs  （chat イベントはサーバ
 閲覧: /api/admin
 ```
 
-主なイベント種別: `session_start`（クライアント）/ `chat`（サーバー）/ `step_change`（クライアント、guided/free）/
-`mental_state_change`（クライアント、opportunistic）/ `result_shown`（クライアント、guided）/
-`chat_error`（サーバー。Gemini 呼び出しの失敗。管理画面の event_type で絞り込める）。
+主なイベント種別: `session_start`（クライアント）/ `chat`（サーバー）/ `result_shown`（クライアント、guided）/
+`chat_error`（サーバー。Gemini 呼び出しの失敗。管理画面の生ログで event_type から絞り込める）。
+
+- 以前あった `step_change` / `mental_state_change` は **廃止した**（`chat` ログと重複するため）。過去のログには残っており、生ログ表では選んで見られる。
+  guided のステップ遷移は `chat` の `currentStep`（送信時点）と `advance` から、opportunistic の状態推移は `chat` の `mentalModel` / `openQuestions`（返答後の状態）の並びから導出する。
+- `chatReadyMs`（チャット構築時間。数ミリ秒で意味が無い）は記録しなくなった。
 
 チャット送信に失敗した場合、`src/App.jsx` は失敗した発言を `messages` から外して入力欄に戻す（応答の無い user 発言が履歴に残らないようにするため）。
 
@@ -180,10 +191,11 @@ npm run preview  # ビルド結果のプレビュー
 
 - まずこの `AGENTS.md` を読んで全体像を把握する。その後、変更するファイルと直接の依存先だけを読む。
 - 変更範囲を小さく保つ。
-- 条件（condition）の追加・既定値の変更: `src/utils/condition.js`。表示名は `CONDITION_LABELS` と `api/admin.js` の `CONDITION_LABELS` の両方にある（管理画面側は現状「日和見（パイロット）」表記のまま）。
-- チューターの振る舞い: `api/_lib/gemini.js`（条件ごとの `TUTOR_RULES*` と `buildSystemPrompt()`）。
+- 条件（condition）の追加・既定値の変更: `src/utils/condition.js`。表示名は `CONDITION_LABELS` が `condition.js`（フロント）と `api/_lib/adminView.js`（管理画面）の両方にある。
+- チューターの振る舞い: `api/_lib/gemini.js`（条件ごとの `TUTOR_RULES*` と `buildSystemPrompt()`）。変更したら `PROMPT_VERSION` も更新する。
 - API の仕様を変える場合: フロントの `fetch`（`src/bot/geminiBot.js`）と `api/chat.js` の両方を確認する。
-- ログに項目を足す場合: `api/chat.js` または `src/App.jsx` の `logEvent` 呼び出しに足す。`payload` は JSONB のためテーブル変更は不要。
+- ログに項目を足す場合: `api/chat.js`（`buildLogContext()` または `insertLog` 呼び出し）または `src/App.jsx` の `logEvent` 呼び出しに足す。`payload` は JSONB のためテーブル変更は不要。
+  管理画面に表示したい場合は `api/_lib/adminView.js` も直す。
 - 教材コードの追加・変更: `src/data/codeLibrary.js`。
 - 画面: `src/App.jsx` と `src/styles/global.css`。
 - `sessionId` の発行は `handleStart()` で行う前提を崩さないこと（ログの会話単位が `sessionId` なので、コードを切り替えても同じ ID を使い回すと別のコードのログが混ざる）。
@@ -207,7 +219,7 @@ npm run preview  # ビルド結果のプレビュー
 - コード選択画面: `src/App.jsx`（`SelectionPhase`）、`src/data/codeLibrary.js`
 - チャット画面: `src/App.jsx`（`ChattingPhase`）、`src/styles/global.css`
 - ログの内容・保存: `src/utils/logger.js`、`api/log.js`、`api/chat.js`、`api/_lib/supabase.js`
-- ログの見え方: `api/admin.js`
+- ログの見え方: `api/_lib/adminView.js`（表示・集計）、`api/admin.js`（取得・振り分け）
 
 ## 期待するエージェントの振る舞い
 
