@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
-import { STEP_LABELS, getInitialBotMessage, getInitialMentalState, getUserDeclaredDoneMessage, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
+import { STEP_LABELS, getInitialBotMessage, getInitialTutorState, getUserDeclaredDoneMessage, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
 import { generateSessionId, logEvent } from './utils/logger'
 import { resolveCondition, CONDITION_LABELS } from './utils/condition'
 import './styles/global.css'
@@ -287,12 +287,10 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
   const [step, setStep] = useState(condition === 'free' ? 'free' : condition === 'opportunistic' ? 'opportunistic' : 'purpose')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
-  // opportunistic条件専用の状態。stepの代わりにこちらで進行を管理する。
-  // trapStates: 問題の罠（traps）ごとの状態。phase: 'reading'（読解中）| 'done'（完了後。質問は続けられる）。
-  const [mentalModel, setMentalModel] = useState(() => getInitialMentalState(activeCode).mentalModel)
-  const [openQuestions, setOpenQuestions] = useState(() => getInitialMentalState(activeCode).openQuestions)
-  const [trapStates, setTrapStates] = useState(() => getInitialMentalState(activeCode).trapStates)
-  const [readingPhase, setReadingPhase] = useState(() => getInitialMentalState(activeCode).phase)
+  // opportunistic条件専用の状態（期待・罠の到達状況、支援段階、phase など。api/_lib/tutorState.js 参照）。サーバーが返した値をそのまま保持して毎回送る。
+  // 内部状態（why/how や期待の達成状況）を参加者に見せると、「confirmed なら終わり」のように行動が左右されるため、画面には出さない。
+  const [tutorState, setTutorState] = useState(getInitialTutorState)
+  const readingPhase = tutorState.phase
   // free/opportunistic条件は自己説明を強制する設計ではないので最初から解除。
   // guided条件は summaryステップがadvance:trueになった瞬間に解除する。
   const [resultUnlocked, setResultUnlocked] = useState(condition === 'free' || condition === 'opportunistic')
@@ -330,14 +328,11 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       const history = messages.map(m => ({ role: m.role, content: m.content }))
 
       if (condition === 'opportunistic') {
-        // opportunistic条件はstep進行ではなく、状態（mentalModel/openQuestions/trapStates/phase）を毎回送受信して更新する。
+        // opportunistic条件はstep進行ではなく、状態（tutorState）を毎回送受信して更新する。
         const botReply = await sendToGeminiOpportunistic({
           sessionId,
           activeCode,
-          mentalModel,
-          openQuestions,
-          trapStates,
-          phase: readingPhase,
+          tutorState,
           userMessage: text,
           history,
         })
@@ -350,10 +345,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         }
 
         setMessages(prev => [...prev, botMessage])
-        setMentalModel(botReply.mentalModel)
-        setOpenQuestions(botReply.openQuestions)
-        setTrapStates(botReply.trapStates)
-        setReadingPhase(botReply.phase)
+        setTutorState(botReply.tutorState)
         // 状態の推移や読解の終了・再開は、サーバーが chat / session_complete / session_reopen ログに残すので、ここでは別途ログしない。
       } else {
         const botReply = await sendToGemini({
@@ -408,7 +400,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
   const userTurns = messages.filter(m => m.role === 'user').length
   const handleDeclareDone = () => {
     if (readingPhase !== 'reading' || isLoading || userTurns === 0) return
-    setReadingPhase('done')
+    setTutorState(current => ({ ...current, phase: 'done', pendingWrapUp: false, focus: null }))
     setMessages(prev => [...prev, getUserDeclaredDoneMessage()])
     logEvent({
       sessionId,
@@ -416,9 +408,8 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       condition,
       codeId: activeCode.id,
       turn: userTurns,
-      mentalModel,
-      openQuestions,
-      trapStates,
+      expectationStates: tutorState.expectationStates,
+      trapStates: tutorState.trapStates,
     })
     setTimeout(scrollToBottom, 50)
   }
@@ -480,10 +471,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
           </div>
 
           {condition === 'opportunistic' && (
-            <div className="open-questions" aria-label="保留中の問い">
-              <div className="open-questions__mental">
-                why: {mentalModel.why} / how: {mentalModel.how}
-              </div>
+            <div className="open-questions" aria-label="読解の状態">
               {readingPhase === 'done' ? (
                 <div className="open-questions__mental">✓ 読解完了（このあとも質問はできます）</div>
               ) : (
@@ -495,15 +483,6 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
                 >
                   理解できた
                 </button>
-              )}
-              {openQuestions.length > 0 && (
-                <ul className="open-questions__list">
-                  {openQuestions.map(q => (
-                    <li key={q.id} className={`open-questions__item open-questions__item--${q.status}`}>
-                      [{q.level}] {q.target}（{q.status}）
-                    </li>
-                  ))}
-                </ul>
               )}
             </div>
           )}

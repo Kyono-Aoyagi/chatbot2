@@ -1,11 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { buildOpportunisticPrompt } from './opportunisticPrompt.js'
 import {
+  FORCED_WRAP_UP_REPLY,
+  buildExpectationList,
   buildTrapList,
-  normalizeTrapStates,
-  sanitizeMentalModel,
+  normalizeTutorState,
   sanitizeMove,
-  sanitizeOpenQuestions,
   settleOpportunisticState,
 } from './tutorState.js'
 
@@ -15,7 +15,10 @@ export const MODEL_NAME = 'gemini-3.1-flash-lite'
 // プロンプト（TUTOR_RULES* / STEP_FOCUS / buildSystemPrompt / opportunisticPrompt.js）を変更したときは、
 // この値を手で更新すること。ログに記録され、「どの版のプロンプトで取った会話か」を後から区別できるようにする。
 // 形式は日付+アルファベット。
-export const PROMPT_VERSION = '2026-10-06a'
+export const PROMPT_VERSION = '2026-10-13a'
+
+// 返答が空だったときにユーザーへ出す文（モデルが空文字を返すことがある）。
+const EMPTY_REPLY_FALLBACK = 'うまく返答を作れませんでした。もう一度送ってもらえますか。'
 
 // 汎用フォーカス（コード構造に依存しない書き方）。
 // 特定コード専用の着目観点は codeLibrary.js 側の activeCode.stepFocus[step] で上書きできる。
@@ -99,9 +102,9 @@ const TUTOR_RULES_FREE = `
 {"reply":"ここに返答テキスト"}
 `.trim()
 
-function buildSystemPrompt({ activeCode, currentStep, condition, mentalModel, openQuestions, trapStates, phase }) {
+function buildSystemPrompt({ activeCode, currentStep, condition, tutorState }) {
   if (condition === 'opportunistic') {
-    return buildOpportunisticPrompt({ activeCode, mentalModel, openQuestions, trapStates, phase })
+    return buildOpportunisticPrompt({ activeCode, tutorState })
   }
 
   if (condition === 'free') {
@@ -224,103 +227,83 @@ function parseReply(raw) {
   }
 }
 
-export async function askGemini({
-  activeCode, currentStep, userMessage, history, condition,
-  mentalModel, openQuestions, trapStates, phase,
-}) {
+// userMessage: 今回のユーザー発言。history: これまでの会話（今回の発言は含まない）。
+// tutorState: opportunistic条件の状態（クライアントが保持して毎回送る。tutorState.js 参照）。
+export async function askGemini({ activeCode, currentStep, userMessage, history, condition, tutorState }) {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。環境変数を確認してください。')
   }
 
-  // クライアントから受け取った状態は信用せず、整えてから使う（guided/free条件では使われないが、形は揃える）。
   const isOpportunistic = condition === 'opportunistic'
+  const expectationList = isOpportunistic ? buildExpectationList(activeCode) : []
   const trapList = isOpportunistic ? buildTrapList(activeCode) : []
-  const prev = {
-    mentalModel: sanitizeMentalModel(mentalModel, null),
-    openQuestions: sanitizeOpenQuestions(openQuestions, []),
-    trapStates: normalizeTrapStates(trapStates, trapList),
-    phase: isOpportunistic && phase === 'done' ? 'done' : 'reading',
-  }
+  // クライアントから受け取った状態は信用せず、問題のリストに合わせて整えてから使う。
+  const prev = normalizeTutorState(tutorState, { expectationList, trapList })
 
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
   const model = genAI.getGenerativeModel({
     model: MODEL_NAME,
-    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition, ...prev }),
+    systemInstruction: buildSystemPrompt({ activeCode, currentStep, condition, tutorState: prev }),
   })
+  const geminiHistory = toGeminiHistory(history)
 
-  let chatHistory = toGeminiHistory(history)
-  let messageToSend = userMessage
-  let retries = 0
-  let regenerated = false
-  let attempt = null
-  let settled = null
-
-  // apiCallMs にはリトライの待ち時間・再生成の時間も含まれる。リトライ回数は retries、再生成の有無は regenerated で別に記録する。
+  // apiCallMs にはリトライの待ち時間も含まれる。リトライ回数は retries で別に記録する。
   const apiT0 = Date.now()
-  for (let pass = 0; pass < 2; pass++) {
-    const historyForPass = chatHistory
-    const { result, retries: passRetries } = await sendWithRetry(
-      () => model.startChat({ history: historyForPass }),
-      messageToSend,
-    )
-    retries += passRetries
-    const raw = result.response.text()
-    attempt = parseReply(raw)
-    if (!isOpportunistic || attempt.parseFailed) break
-
-    settled = settleOpportunisticState({ parsed: attempt.parsed, prev, trapList })
-
-    // モデルが「終了」と申告したが、状態が終了条件を満たしていない場合（締めくくりの返答になっているのに終わっていない）は、
-    // 1回だけ作り直させる。2回目は結果をそのまま採用する（その場合 phase は reading のままで、拒否理由がログに残る）。
-    const rejectedDone = attempt.parsed.done === true && prev.phase === 'reading' && settled.completionRejected
-    if (!rejectedDone || pass === 1) break
-
-    regenerated = true
-    chatHistory = [
-      ...chatHistory,
-      { role: 'user', parts: [{ text: messageToSend }] },
-      { role: 'model', parts: [{ text: raw }] },
-    ]
-    messageToSend =
-      `[システム通知] 読解の終了条件を満たしていません（${settled.completionRejected.join('、')}）。` +
-      '直前の締めくくりの返答は取り消します。done を false にして、読解中の優先順位に従い、' +
-      'ユーザーの最初の発言への返答として次の問いを返し直してください。'
-  }
+  const { result, retries } = await sendWithRetry(
+    () => model.startChat({ history: geminiHistory }),
+    userMessage,
+  )
   const apiCallMs = Date.now() - apiT0
+
+  const attempt = parseReply(result.response.text())
+  const noState = { tutorState: prev, move: null, note: null, userAct: null, phaseEvent: null,
+    completionRejected: null, forcedWrapUp: false, downgraded: [] }
 
   if (attempt.parseFailed) {
     // 解析に失敗した場合は、生テキストを返答にして、状態は直前のものを維持する。
-    return {
-      reply: attempt.reply,
-      parseFailed: true,
-      retries,
-      regenerated,
-      advance: false,
-      ...prev,
-      phaseEvent: null,
-      done: false,
-      completionRejected: null,
-      apiCallMs,
-    }
+    return { ...noState, reply: attempt.reply || EMPTY_REPLY_FALLBACK, parseFailed: true, retries, advance: false, apiCallMs }
   }
 
   const { parsed } = attempt
+  let reply = String(parsed.reply ?? '').trim()
+  if (!reply) {
+    // JSONとしては正しいが返答が空（画面に空のメッセージが出てしまうのを防ぐ）。状態は更新しない。
+    return { ...noState, reply: EMPTY_REPLY_FALLBACK, parseFailed: true, retries, advance: false, apiCallMs }
+  }
+
   const common = {
-    reply: String(parsed.reply ?? '').trim(),
-    // free条件にはadvanceの概念が無いのでtrue固定としておく（フロント側では使用しない）。
     advance: condition === 'free' ? true : parsed.advance === true,
-    move: sanitizeMove(parsed.move),
-    note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
     parseFailed: false,
     retries,
-    regenerated,
     apiCallMs,
   }
 
   if (!isOpportunistic) {
     // guided/free条件では状態を使わない。形を揃えるために直前の状態をそのまま返す（フロント側は無視する）。
-    return { ...common, ...prev, phaseEvent: null, done: false, completionRejected: null }
+    return { ...noState, ...common, reply, move: sanitizeMove(parsed.move) }
   }
 
-  return { ...common, ...settled }
+  // ユーザーが実際に言った言葉（covered の evidence が実在するかの検査に使う）
+  const userTexts = [
+    ...(Array.isArray(history) ? history.filter(m => m?.role === 'user').map(m => String(m.content ?? '')) : []),
+    userMessage,
+  ]
+  const settled = settleOpportunisticState({ parsed, prev, expectationList, trapList, userTexts })
+
+  // 終了条件を満たしたのに締めくくられなかった状態が続いたときの打ち切り（返答を固定の締めくくりに置き換える）
+  if (settled.forcedWrapUp) reply = FORCED_WRAP_UP_REPLY
+
+  const { userAct, move, downgraded, completionRejected, forcedWrapUp, phaseEvent, ...state } = settled
+  return {
+    ...common,
+    reply,
+    userAct,
+    move: forcedWrapUp ? 'wrap_up' : move,
+    note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 80) : null,
+    tutorState: state, // expectationStates, trapStates, focus, phase, pendingWrapUp
+    downgraded,
+    completionRejected,
+    forcedWrapUp,
+    phaseEvent,
+  }
 }

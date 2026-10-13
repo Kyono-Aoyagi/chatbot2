@@ -55,19 +55,16 @@ export function getInitialBotMessage(codeTitle, condition) {
   }
 }
 
-// opportunistic条件用の初期状態。
-// mentalModel: why/howの集約理解度。 openQuestions: 局所的な問いの保留キュー。
-// trapStates: activeCode.traps ごとの状態（id は t1, t2, ... = サーバー側 buildTrapList と同じ並び・同じ上限）。
-// phase: 'reading'（読解中）| 'done'（完了後）。
-const MAX_TRAPS = 5
-
-export function getInitialMentalState(activeCode) {
-  const traps = Array.isArray(activeCode?.traps) ? activeCode.traps.slice(0, MAX_TRAPS) : []
+// opportunistic条件用の初期状態（tutorState）。
+// 期待（expectationStates）と罠（trapStates）の一覧は、問題ごとの定義に合わせてサーバーが最初のリクエストで埋めて返すので、ここでは空にしておく。
+// phase: 'reading'（読解中）| 'done'（完了後。質問は続けられる）。詳細は api/_lib/tutorState.js。
+export function getInitialTutorState() {
   return {
-    mentalModel: { why: 'unresolved', how: 'unresolved' },
-    openQuestions: [],
-    trapStates: traps.map((_, i) => ({ id: `t${i + 1}`, status: 'untouched' })),
+    expectationStates: [],
+    trapStates: [],
+    focus: null,
     phase: 'reading',
+    pendingWrapUp: false,
   }
 }
 
@@ -114,8 +111,8 @@ export async function sendToGemini({ sessionId, activeCode, currentStep, userMes
 }
 
 // opportunistic条件専用の送信関数。
-// stepの代わりに mentalModel / openQuestions / trapStates / phase を毎回送受信する（サーバーレスなので状態はクライアント側が持つ）。
-export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalModel, openQuestions, trapStates, phase, userMessage, history }) {
+// stepの代わりに tutorState を毎回送受信する（サーバーレスなので状態はクライアント側が持つ）。
+export async function sendToGeminiOpportunistic({ sessionId, activeCode, tutorState, userMessage, history }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -125,10 +122,7 @@ export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalM
       userMessage,
       history,
       condition: 'opportunistic',
-      mentalModel,
-      openQuestions,
-      trapStates,
-      phase,
+      tutorState,
     }),
   })
 
@@ -141,9 +135,6 @@ export async function sendToGeminiOpportunistic({ sessionId, activeCode, mentalM
 
   return {
     content: data.reply,
-    mentalModel: data.mentalModel ?? mentalModel,
-    openQuestions: Array.isArray(data.openQuestions) ? data.openQuestions : openQuestions,
-    trapStates: Array.isArray(data.trapStates) ? data.trapStates : trapStates,
-    phase: data.phase === 'done' ? 'done' : 'reading',
+    tutorState: data.tutorState ?? tutorState,
   }
 }
