@@ -126,7 +126,7 @@ function summarizeSession(s) {
       move: c.payload?.move ?? null,
       note: c.payload?.note ?? '',
     })),
-    // guided/free の chat ログにも既定の mentalModel が入るため、opportunistic 以外では状態を出さない。
+    // why/how の理解状態は opportunistic 条件だけで記録する。
     finalMental: condition === 'opportunistic' ? (lastChat?.mentalModel ?? null) : null,
     lastStep: lastChat?.currentStep ?? null,
     // 読解の終了（最初の1件）と再開の回数。reason: system | user_declared | closed_with_gaps
@@ -320,6 +320,13 @@ function renderMentalDiff(prev, next) {
   }).join(' ')
 }
 
+function renderMentalEvidence(evidence) {
+  const rows = ['why', 'how']
+    .filter(key => typeof evidence?.[key] === 'string' && evidence[key].trim())
+    .map(key => `<li>${escapeHtml(key)} の根拠:「${escapeHtml(evidence[key])}」</li>`)
+  return rows.length ? `<ul>${rows.join('')}</ul>` : ''
+}
+
 function renderQuestionDiff(prevList, nextList) {
   const prevMap = new Map((prevList ?? []).map(q => [q.id, q]))
   const nextIds = new Set((nextList ?? []).map(q => q.id))
@@ -372,6 +379,8 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
         <div class="turn-label">${time}</div>
         <div class="complete-box">
           ✓ 「理解できた」で読解を終了（${escapeHtml(COMPLETE_REASON_LABEL[p.reason] ?? p.reason ?? '-')}・${escapeHtml(p.turn ?? '-')}ターン後）
+          ${p.mentalModel ? `<br>${renderMentalDiff(INITIAL_MENTAL, p.mentalModel)}` : ''}
+          ${renderMentalEvidence(p.mentalModelEvidence)}
           ${gaps.length ? `<br><small>${gaps.map(escapeHtml).join(' / ')}</small>` : ''}
         </div>
       </div>`
@@ -407,7 +416,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
 
     let stateHtml = ''
     if (isOpp && p.mentalModel) {
-      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
+      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderMentalEvidence(p.mentalModelEvidence)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
       prevMental = p.mentalModel
       prevQuestions = p.openQuestions ?? []
       prevTraps = p.trapStates ?? []

@@ -408,6 +408,8 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       condition,
       codeId: activeCode.id,
       turn: userTurns,
+      mentalModel: tutorState.mentalModel,
+      mentalModelEvidence: tutorState.mentalModelEvidence,
       expectationStates: tutorState.expectationStates,
       trapStates: tutorState.trapStates,
     })

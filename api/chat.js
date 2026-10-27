@@ -46,8 +46,7 @@ export default async function handler(req, res) {
     const context = buildLogContext(req.body)
 
     // チャットの往復をSupabaseに保存（本番ではVercel Logsではなくこちらを一次ソースにする）。
-    // opportunistic条件では状態（expectationStates / trapStates / focus / phase）のスナップショット（この返答の「後」の状態）も残し、
-    // 期待の到達・誤解の発生と解消・支援段階の推移を、後からログだけで追えるようにする。
+    // opportunistic条件では期待・why/how の理解状態と根拠発話・罠・支援段階のスナップショット（返答後）を保存する。
     // guidedのステップ遷移は currentStep（送信時点）と advance から導出できるので、step_change は別に残さない。
     await insertLog({
       ...context,
@@ -60,6 +59,10 @@ export default async function handler(req, res) {
       note: result.note,
       parseFailed: result.parseFailed,
       retries: result.retries,
+      ...(condition === 'opportunistic' ? {
+        mentalModel: nextState.mentalModel,
+        mentalModelEvidence: nextState.mentalModelEvidence,
+      } : {}),
       expectationStates: nextState.expectationStates,
       trapStates: nextState.trapStates,
       focus: nextState.focus,
@@ -82,6 +85,8 @@ export default async function handler(req, res) {
         reason: 'system',
         gaps: [],
         forcedWrapUp: result.forcedWrapUp,
+        mentalModel: nextState.mentalModel,
+        mentalModelEvidence: nextState.mentalModelEvidence,
         expectationStates: nextState.expectationStates,
         trapStates: nextState.trapStates,
       })
@@ -89,6 +94,8 @@ export default async function handler(req, res) {
       await insertLog({
         ...context,
         eventType: 'session_reopen',
+        mentalModel: nextState.mentalModel,
+        mentalModelEvidence: nextState.mentalModelEvidence,
         expectationStates: nextState.expectationStates,
         trapStates: nextState.trapStates,
       })

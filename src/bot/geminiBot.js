@@ -61,6 +61,8 @@ export function getInitialBotMessage(codeTitle, condition) {
 export function getInitialTutorState() {
   return {
     expectationStates: [],
+    mentalModel: { why: 'unresolved', how: 'unresolved' },
+    mentalModelEvidence: { why: null, how: null },
     trapStates: [],
     focus: null,
     phase: 'reading',

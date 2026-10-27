@@ -3,6 +3,8 @@
 // 状態（tutorState）はサーバーレスなのでクライアントが保持し、毎回送受信する。
 //   expectationStates: [{ id, status, evidence }]  期待（ユーザーに自分の言葉で言ってほしい内容）ごとの到達度
 //                       status: missing | partial | covered。covered には evidence（ユーザーの発言の一部）が要る
+//   mentalModel      : { why, how }              why/how の理解状態（unresolved | conjectured | confirmed）
+//   mentalModelEvidence: { why, how }             confirmed の根拠となったユーザー発話
 //   trapStates       : [{ id, status }]            罠（誤解）ごとの状態。untouched | triggered | cleared
 //   focus            : { target, level } | null    前ターンの返答が取り上げた期待/罠のidと、そのとき使った支援段階(0〜3)
 //   phase            : 'reading' | 'done'
@@ -23,6 +25,7 @@ const DEFAULT_EXPECTATIONS = [
 ]
 
 const EXPECTATION_STATUS = new Set(['missing', 'partial', 'covered'])
+const MENTAL_STATUS = new Set(['unresolved', 'conjectured', 'confirmed'])
 const TRAP_STATUS = new Set(['untouched', 'triggered', 'cleared'])
 const USER_ACTS = new Set(['answer', 'claim', 'question', 'dont_know', 'complaint', 'chitchat', 'ack'])
 const VALID_MOVE = new Set(['pump', 'hint', 'prompt', 'assertion', 'answer', 'feedback', 'repair', 'wrap_up', 'other'])
@@ -88,10 +91,34 @@ export function normalizeTutorState(candidate, { expectationList, trapList }) {
   const phase = candidate?.phase === 'done' ? 'done' : 'reading'
   return {
     expectationStates: normalizeExpectationStates(candidate?.expectationStates, expectationList),
+    mentalModel: sanitizeMentalModel(candidate?.mentalModel),
+    mentalModelEvidence: sanitizeMentalModelEvidence(candidate?.mentalModelEvidence),
     trapStates: normalizeTrapStates(candidate?.trapStates, trapList),
     focus: normalizeFocus(candidate?.focus, expectationList, trapList),
     phase,
     pendingWrapUp: phase === 'reading' && candidate?.pendingWrapUp === true,
+  }
+}
+
+export function defaultMentalModel() {
+  return { why: 'unresolved', how: 'unresolved' }
+}
+
+export function sanitizeMentalModel(candidate, fallback = defaultMentalModel()) {
+  const base = fallback ?? defaultMentalModel()
+  if (!candidate || typeof candidate !== 'object') return { ...base }
+  return {
+    why: MENTAL_STATUS.has(candidate.why) ? candidate.why : base.why,
+    how: MENTAL_STATUS.has(candidate.how) ? candidate.how : base.how,
+  }
+}
+
+export function sanitizeMentalModelEvidence(candidate, fallback = { why: null, how: null }) {
+  const base = fallback ?? { why: null, how: null }
+  if (!candidate || typeof candidate !== 'object') return { ...base }
+  return {
+    why: typeof candidate.why === 'string' ? candidate.why.slice(0, 160) : base.why,
+    how: typeof candidate.how === 'string' ? candidate.how.slice(0, 160) : base.how,
   }
 }
 
@@ -148,8 +175,10 @@ export function applyTrapUpdates(prevStates, updates, list) {
 // 終了条件: すべての期待が covered で、triggered（誤解の兆候が出て未解消）の罠が無い。
 // untouched の罠は終了を妨げない（罠を確認するために、ユーザーが触れていない点を探し回らせないため）。
 // 戻り値: { ok, gaps }  gaps は満たせていない理由（ログと「理解できた」ボタンの記録に使う）。
-export function evaluateCompletion({ expectationStates, trapStates }) {
+export function evaluateCompletion({ expectationStates, trapStates, mentalModel } = {}) {
   const gaps = []
+  if (mentalModel?.why !== 'confirmed') gaps.push('why が confirmed ではない')
+  if (mentalModel?.how !== 'confirmed') gaps.push('how が confirmed ではない')
   for (const e of expectationStates ?? []) {
     if (e.status !== 'covered') gaps.push(`期待が未到達: ${e.id}（${e.status}）`)
   }
@@ -157,6 +186,30 @@ export function evaluateCompletion({ expectationStates, trapStates }) {
     if (t.status === 'triggered') gaps.push(`罠が未解消: ${t.id}`)
   }
   return { ok: gaps.length === 0, gaps }
+}
+
+function applyMentalModel({ candidate, evidenceCandidate, fallbackModel, fallbackEvidence, userTexts }) {
+  const model = sanitizeMentalModel(candidate, fallbackModel)
+  const evidence = sanitizeMentalModelEvidence(evidenceCandidate, fallbackEvidence)
+  const nextEvidence = { ...fallbackEvidence }
+  for (const key of ['why', 'how']) {
+    const quote = evidence[key]
+    const validQuote = typeof quote === 'string' && evidenceInUserTexts(quote, userTexts)
+    if (model[key] === 'confirmed' && !validQuote) {
+      // A confirmed state needs a real learner utterance as evidence.
+      const fallbackQuote = fallbackEvidence[key]
+      const validFallback = fallbackModel[key] === 'confirmed'
+        && typeof fallbackQuote === 'string'
+        && evidenceInUserTexts(fallbackQuote, userTexts)
+      model[key] = validFallback ? 'confirmed' : 'conjectured'
+      nextEvidence[key] = validFallback ? fallbackQuote : null
+    } else if (model[key] === 'confirmed') {
+      nextEvidence[key] = quote.slice(0, 160)
+    } else {
+      nextEvidence[key] = null
+    }
+  }
+  return { mentalModel: model, mentalModelEvidence: nextEvidence }
 }
 
 // ---------- 焦点と支援段階 ----------
@@ -203,8 +256,15 @@ export function settleOpportunisticState({ parsed, prev, expectationList, trapLi
 
   const { states: expectationStates, downgraded } = applyExpectationUpdates(
     prev.expectationStates, parsed.expectationUpdates, expectationList, userTexts)
+  const { mentalModel, mentalModelEvidence } = applyMentalModel({
+    candidate: parsed.mentalModel,
+    evidenceCandidate: parsed.mentalModelEvidence,
+    fallbackModel: prev.mentalModel,
+    fallbackEvidence: prev.mentalModelEvidence,
+    userTexts,
+  })
   const trapStates = applyTrapUpdates(prev.trapStates, parsed.trapUpdates, trapList)
-  const next = { expectationStates, trapStates }
+  const next = { expectationStates, mentalModel, mentalModelEvidence, trapStates }
   const { ok, gaps } = evaluateCompletion(next)
 
   if (prev.phase === 'done') {
@@ -236,5 +296,10 @@ export function settleOpportunisticState({ parsed, prev, expectationList, trapLi
 }
 
 function pickState(s) {
-  return { expectationStates: s.expectationStates, trapStates: s.trapStates }
+  return {
+    expectationStates: s.expectationStates,
+    mentalModel: s.mentalModel,
+    mentalModelEvidence: s.mentalModelEvidence,
+    trapStates: s.trapStates,
+  }
 }

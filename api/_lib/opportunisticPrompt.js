@@ -37,6 +37,17 @@ export const TUTOR_RULES_OPPORTUNISTIC = `
 - ユーザーが誤りを述べたら、covered から partial か missing に戻す。
 変化した期待だけを expectationUpdates に入れる。
 
+## why/how の逐次判定
+今回の発言を含む会話全体を見て、学習者の理解状態を毎ターン判定し、mentalModel を返す。
+- why: コード全体が何を目的とし、何を入力・出力するか。
+- how: その目的をどの処理・条件・変数の更新で実現するか。
+- unresolved: 説明がまだ無い。conjectured: 説明はあるが不十分・曖昧・誤りが残る。confirmed: 学習者自身の正確な説明があり、コード上の根拠も示されている。
+- 「わかった」「はい」などの自己申告、チューターの説明の単なる追認、関数名だけの反復、疑問形や「〜かな」の推測は confirmed の根拠にしない。
+- confirmed にした項目は、根拠となる学習者自身の発話を mentalModelEvidence に短く一字一句引用する。発話に根拠が無ければ confirmed にしない。
+- 誤解や矛盾が現れたら confirmed から conjectured または unresolved に戻す。
+- why または how が confirmed でなければ、その理解は未確認として扱い、期待がすべて covered でも必要に応じてその観点を一つ尋ねる。理解状態と期待状態が食い違う場合、confirmed でない側を優先する。
+- why/how の状態名や判定表は参加者に見せない。対話では必要な着目点を自然に尋ねる。
+
 ## 罠（t1, t2, ...）
 - triggered：ユーザーの発言に、その誤解・見落としの兆候が出た。
 - cleared：ユーザーが自分の言葉で訂正した。
@@ -52,7 +63,8 @@ ${LADDER.map((l, i) => `${i}. ${l}`).join(' → ')}
 - 別の焦点に移るときは pump から始める。上限は assertion で、assertion では答えを直接説明してよい。
 
 ## 終了
-次の2つが満たされたら、読解は終了（判定はシステムが行う）。
+次の条件が満たされたら、読解は終了（判定はシステムが行う）。
+- mentalModel の why と how が、どちらも confirmed
 - すべての期待が covered
 - triggered の罠が無い
 今回のあなたの更新の後にこれを満たすなら、move を wrap_up にし、返答は締めくくりだけにする（問いを付けない）。
@@ -76,7 +88,7 @@ ${LADDER.map((l, i) => `${i}. ${l}`).join(' → ')}
 - move：前進で問いを付けたなら、その段階（pump / hint / prompt / assertion）。問いを付けなかったなら、反応の種類
   （answer：質問に答えた／feedback：正誤を伝えた／repair：不満に応じた）、wrap_up、other のどれか。
 - focus：今回の前進で取り上げた期待・罠のid。取り上げなかったら null。
-{"userAct":"answer|claim|question|dont_know|complaint|chitchat|ack","expectationUpdates":[{"id":"e1","status":"covered","evidence":"ユーザーの発言の一部"}],"trapUpdates":[{"id":"t1","status":"triggered"}],"focus":"e1またはt1またはnull","move":"pump|hint|prompt|assertion|answer|feedback|repair|wrap_up|other","note":"理由を40字以内で","reply":"返答","reopen":false}
+{"userAct":"answer|claim|question|dont_know|complaint|chitchat|ack","expectationUpdates":[{"id":"e1","status":"covered","evidence":"ユーザーの発言の一部"}],"mentalModel":{"why":"unresolved|conjectured|confirmed","how":"unresolved|conjectured|confirmed"},"mentalModelEvidence":{"why":"confirmedの根拠となるユーザー発話。未確認なら空文字","how":"confirmedの根拠となるユーザー発話。未確認なら空文字"},"trapUpdates":[{"id":"t1","status":"triggered"}],"focus":"e1またはt1またはnull","move":"pump|hint|prompt|assertion|answer|feedback|repair|wrap_up|other","note":"理由を40字以内で","reply":"返答","reopen":false}
 `.trim()
 
 // チューターだけが知る情報（期待・罠・正解・手がかり）をプロンプト断片にする。
@@ -123,6 +135,8 @@ ${activeCode.code}
 
 ${buildReferenceBlock(activeCode)}## 現在の状態
 phase: ${s.phase === 'done' ? 'done' : 'reading'}
+mentalModel: ${JSON.stringify(s.mentalModel ?? { why: 'unresolved', how: 'unresolved' })}
+mentalModelEvidence: ${JSON.stringify(s.mentalModelEvidence ?? { why: null, how: null })}
 終了待ち: ${s.pendingWrapUp ? 'はい' : 'いいえ'}
 expectationStates: ${JSON.stringify((s.expectationStates ?? []).map(({ id, status }) => ({ id, status })))}
 trapStates: ${JSON.stringify(s.trapStates ?? [])}

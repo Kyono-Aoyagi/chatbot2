@@ -15,7 +15,7 @@ export const MODEL_NAME = 'gemini-3.1-flash-lite'
 // プロンプト（TUTOR_RULES* / STEP_FOCUS / buildSystemPrompt / opportunisticPrompt.js）を変更したときは、
 // この値を手で更新すること。ログに記録され、「どの版のプロンプトで取った会話か」を後から区別できるようにする。
 // 形式は日付+アルファベット。
-export const PROMPT_VERSION = '2026-10-13a'
+export const PROMPT_VERSION = '2026-10-27a'
 
 // 返答が空だったときにユーザーへ出す文（モデルが空文字を返すことがある）。
 const EMPTY_REPLY_FALLBACK = 'うまく返答を作れませんでした。もう一度送ってもらえますか。'
