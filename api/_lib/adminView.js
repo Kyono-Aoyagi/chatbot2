@@ -327,6 +327,22 @@ function renderMentalEvidence(evidence) {
   return rows.length ? `<ul>${rows.join('')}</ul>` : ''
 }
 
+function renderExpectationDiff(prevList, nextList) {
+  const prevMap = new Map((prevList ?? []).map(item => [item.id, item.status]))
+  const rows = (nextList ?? []).map(item => {
+    const before = prevMap.get(item.id) ?? 'missing'
+    const status = before === item.status
+      ? escapeHtml(item.status)
+      : `${escapeHtml(before)} → ${escapeHtml(item.status)}`
+    const dimension = escapeHtml(item.dimension ?? 'both')
+    const evidence = typeof item.evidence === 'string' && item.evidence.trim()
+      ? `：「${escapeHtml(item.evidence)}」`
+      : ''
+    return `<li>${escapeHtml(item.id)}/${dimension}: ${status}${evidence}</li>`
+  })
+  return rows.length ? `<ul>${rows.join('')}</ul>` : ''
+}
+
 function renderQuestionDiff(prevList, nextList) {
   const prevMap = new Map((prevList ?? []).map(q => [q.id, q]))
   const nextIds = new Set((nextList ?? []).map(q => q.id))
@@ -363,6 +379,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
 
   let prevMental = INITIAL_MENTAL
+  let prevExpectations = []
   let prevQuestions = []
   let prevTraps = []
   let counter = 0
@@ -381,6 +398,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
           ✓ 「理解できた」で読解を終了（${escapeHtml(COMPLETE_REASON_LABEL[p.reason] ?? p.reason ?? '-')}・${escapeHtml(p.turn ?? '-')}ターン後）
           ${p.mentalModel ? `<br>${renderMentalDiff(INITIAL_MENTAL, p.mentalModel)}` : ''}
           ${renderMentalEvidence(p.mentalModelEvidence)}
+          ${renderExpectationDiff([], p.expectationStates)}
           ${gaps.length ? `<br><small>${gaps.map(escapeHtml).join(' / ')}</small>` : ''}
         </div>
       </div>`
@@ -416,8 +434,9 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
 
     let stateHtml = ''
     if (isOpp && p.mentalModel) {
-      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderMentalEvidence(p.mentalModelEvidence)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
+      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderMentalEvidence(p.mentalModelEvidence)}${renderExpectationDiff(prevExpectations, p.expectationStates)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
       prevMental = p.mentalModel
+      prevExpectations = p.expectationStates ?? []
       prevQuestions = p.openQuestions ?? []
       prevTraps = p.trapStates ?? []
     }

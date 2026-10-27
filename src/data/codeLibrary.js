@@ -18,6 +18,8 @@
  *                （例: ループの変数名や状態変数名など、コード固有の具体的な観点を書く）
  *
  *   --- 以下は opportunistic 条件用（すべて任意。ユーザー貼付コードでは未指定） ---
+ *   expectations: Array<{dimension:'why'|'how'|'both', text:string}>|undefined — 終了前に確認する説明要素。
+ *                文字列だけの旧形式も利用でき、その場合は dimension:'both' として扱う。
  *   reference:   { why: string, how: string }|undefined — チューターだけが知る正解。
  *                mentalModel を confirmed にしてよいかの判断基準になる。ユーザーには直接言わない。
  *   landmarks:   Array<{ target: string, note: string }>|undefined — ユーザーが自発的に触れそうな局所的手がかり。
@@ -47,6 +49,11 @@ scores = [80, 65, 90, 75]
 print(total(scores))`,
     expectedOutput: '310',
     tutorHints: null,
+    expectations: [
+      { dimension: 'why', text: '数値のリストを受け取り、その全要素の合計を返すことを説明できる' },
+      { dimension: 'how', text: 'resultを0から始め、ループで各要素を加算していることを説明できる' },
+      { dimension: 'how', text: 'return resultがループの後にあり、全要素を加算してから返すことを説明できる' },
+    ],
     reference: {
       why: '数値のリストの合計を求めて返す。',
       how: '変数 result を0で初期化し、リストの要素を1つずつ取り出して足し込んでいく。全部足し終えたら result を返す。',
@@ -81,6 +88,12 @@ temperatures = [21, 28, 19, 33, 25]
 print(largest(temperatures))`,
     expectedOutput: '33',
     tutorHints: null,
+    expectations: [
+      { dimension: 'why', text: '数値のリストから最大の値を返すことを説明できる' },
+      { dimension: 'how', text: 'bestと各要素を比較し、より大きい場合だけbestを更新することを説明できる' },
+      { dimension: 'how', text: 'bestを0でなくnumbers[0]から始める理由を、負の値だけのリストを例に説明できる' },
+      { dimension: 'why', text: '返すのは最大値そのものであり、その位置（index）ではないと説明できる' },
+    ],
     reference: {
       why: '数値のリストの中の最大値を返す。',
       how: '先頭の要素を仮の最大値 best として持ち、各要素と比べて、より大きいものが見つかるたびに best を更新する。最後に残った best を返す。',
@@ -120,6 +133,11 @@ for i in range(1, 16):
     print(label(i))`,
     expectedOutput: '1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz',
     tutorHints: null,
+    expectations: [
+      { dimension: 'why', text: '1から15までの数を条件に応じた文字列または数値として順に出力することを説明できる' },
+      { dimension: 'how', text: 'labelが条件を上から判定し、最初に成立した分岐の値をreturnすることを説明できる' },
+      { dimension: 'how', text: '15の倍数判定を3や5の判定より先に置く理由を、elifとreturnの動きに結びつけて説明できる' },
+    ],
     reference: {
       why: '1から15までの各数について、15の倍数なら FizzBuzz、3の倍数なら Fizz、5の倍数なら Buzz、どれでもなければその数自体を出力する。',
       how: '関数 label が条件を上から順に判定し、最初に成立した分岐の値を返す。ループが1から15までを順に渡して出力する。15の判定を先頭に置くことで、3と5の両方の倍数を正しく扱える。',
@@ -186,6 +204,12 @@ print(sorted_values)`,
       how: '隣り合う要素を比較し、逆順なら入れ替える。1周ごとに最大値が末尾に確定していく。'
         + '1周で入れ替えが一度も起きなければ整列済みなので打ち切る。',
     },
+    expectations: [
+      { dimension: 'why', text: '数値のリストを昇順に並べ替えて返すことを説明できる' },
+      { dimension: 'how', text: '隣り合う要素を比較し、逆順なら交換することで大きい値が末尾へ移動することを説明できる' },
+      { dimension: 'how', text: '外側ループのたびに末尾側が確定するため、内側ループの範囲をn - i - 1に縮める理由を説明できる' },
+      { dimension: 'how', text: 'swappedが1周中に交換が起きたかを記録し、交換が無ければ整列済みとしてbreakできる理由を説明できる' },
+    ],
     landmarks: [
       { target: 'swapped', note: '入れ替えの有無を記録するフラグ。早期終了の要' },
       { target: 'range(0, n - i - 1)', note: '周回ごとに内側の範囲が縮む。末尾は確定済みだから' },
@@ -217,6 +241,11 @@ print(sorted_values)`,
 print(calc(5))`,
     expectedOutput: '120',
     tutorHints: null,
+    expectations: [
+      { dimension: 'why', text: 'calc(5)が1から5までの積（階乗）を返すことを説明できる' },
+      { dimension: 'how', text: 'nが1以下で再帰を止め、そうでなければcalc(n - 1)を呼び出すことを説明できる' },
+      { dimension: 'how', text: '再帰から戻る過程で各nを掛け、結果が積み上がることを説明できる' },
+    ],
     reference: {
       why: 'n の階乗（1 から n までの積）を求めて返す。',
       how: '関数が自分自身を n - 1 で呼び出し、その結果に n を掛ける。n が1以下になったら1を返して再帰を止め（基底ケース）、呼び出しから戻る過程で掛け算が積み上がっていく。',
@@ -249,6 +278,11 @@ print(calc(5))`,
 print(f(48, 18))`,
     expectedOutput: '6',
     tutorHints: null,
+    expectations: [
+      { dimension: 'why', text: '2つの整数の最大公約数を返すことを説明できる' },
+      { dimension: 'how', text: 'aとbをbとa % bに同時更新し、余りを使って処理を進めることを説明できる' },
+      { dimension: 'how', text: 'bが0になったときにループを終え、その時点のaを返すことを説明できる' },
+    ],
     reference: {
       why: '2つの整数の最大公約数を求めて返す。',
       how: 'a を b で割った余りを新しい b、元の b を新しい a として更新することを繰り返す（ユークリッドの互除法）。b が0になったときの a が答えになる。',
@@ -284,6 +318,11 @@ data = [42, 17, 58, 9, 31]
 print(find_max(data))`,
     expectedOutput: '9',
     tutorHints: null,
+    expectations: [
+      { dimension: 'why', text: '関数名はfind_maxだが、実際にはリストの最小値を返すことを説明できる' },
+      { dimension: 'how', text: 'resultを先頭要素で初期化し、より小さい値が見つかったとき更新することを説明できる' },
+      { dimension: 'how', text: '比較演算子が<であることが、最大値ではなく最小値を求める理由だと説明できる' },
+    ],
     reference: {
       why: 'リストの中の最小値を返す。関数名は find_max だが、実際の挙動は最小値を求めるもので、名前と実装が食い違っている。',
       how: '先頭の要素を仮の値 result として持ち、より小さい要素が見つかるたびに更新する。最後に残った result を返す。',

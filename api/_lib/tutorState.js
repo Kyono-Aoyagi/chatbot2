@@ -20,8 +20,8 @@ export const LADDER = ['pump', 'hint', 'prompt', 'assertion']
 
 // 問題に expectations が無い場合（ユーザー貼付コードなど）の既定。
 const DEFAULT_EXPECTATIONS = [
-  'コード全体の目的（何を受け取り、何を返すか）を自分の言葉で説明できる',
-  '処理の流れ（どう実現しているか）を、コード上の根拠（変数・処理）を挙げて説明できる',
+  { dimension: 'why', text: 'コード全体の目的（何を受け取り、何を返すか）を自分の言葉で説明できる' },
+  { dimension: 'how', text: '処理の流れ（どう実現しているか）を、コード上の根拠（変数・処理）を挙げて説明できる' },
 ]
 
 const EXPECTATION_STATUS = new Set(['missing', 'partial', 'covered'])
@@ -41,11 +41,20 @@ export const FORCED_WRAP_UP_REPLY =
 
 export function buildExpectationList(activeCode) {
   const own = Array.isArray(activeCode?.expectations)
-    ? activeCode.expectations.filter(t => typeof t === 'string' && t.trim())
+    ? activeCode.expectations.map(item => {
+      if (typeof item === 'string' && item.trim()) return { text: item.trim(), dimension: 'both' }
+      if (item && typeof item.text === 'string' && item.text.trim()) {
+        return {
+          text: item.text.trim(),
+          dimension: item.dimension === 'why' || item.dimension === 'how' ? item.dimension : 'both',
+        }
+      }
+      return null
+    }).filter(Boolean)
     : []
   return (own.length ? own : DEFAULT_EXPECTATIONS)
     .slice(0, MAX_EXPECTATIONS)
-    .map((text, i) => ({ id: `e${i + 1}`, text }))
+    .map(({ text, dimension }, i) => ({ id: `e${i + 1}`, text, dimension }))
 }
 
 export function buildTrapList(activeCode) {
@@ -63,6 +72,7 @@ export function normalizeExpectationStates(candidate, list) {
     const s = byId.get(e.id)
     return {
       id: e.id,
+      dimension: e.dimension ?? 'both',
       status: EXPECTATION_STATUS.has(s?.status) ? s.status : 'missing',
       evidence: typeof s?.evidence === 'string' ? s.evidence.slice(0, 80) : null,
     }
@@ -117,8 +127,8 @@ export function sanitizeMentalModelEvidence(candidate, fallback = { why: null, h
   const base = fallback ?? { why: null, how: null }
   if (!candidate || typeof candidate !== 'object') return { ...base }
   return {
-    why: typeof candidate.why === 'string' ? candidate.why.slice(0, 160) : base.why,
-    how: typeof candidate.how === 'string' ? candidate.how.slice(0, 160) : base.how,
+    why: typeof candidate.why === 'string' ? candidate.why.slice(0, 500) : base.why,
+    how: typeof candidate.how === 'string' ? candidate.how.slice(0, 500) : base.how,
   }
 }
 
@@ -194,13 +204,13 @@ function applyMentalModel({ candidate, evidenceCandidate, fallbackModel, fallbac
   const nextEvidence = { ...fallbackEvidence }
   for (const key of ['why', 'how']) {
     const quote = evidence[key]
-    const validQuote = typeof quote === 'string' && evidenceInUserTexts(quote, userTexts)
+    const validQuote = typeof quote === 'string' && isCertainFullUtterance(quote, userTexts)
     if (model[key] === 'confirmed' && !validQuote) {
       // A confirmed state needs a real learner utterance as evidence.
       const fallbackQuote = fallbackEvidence[key]
       const validFallback = fallbackModel[key] === 'confirmed'
         && typeof fallbackQuote === 'string'
-        && evidenceInUserTexts(fallbackQuote, userTexts)
+        && isCertainFullUtterance(fallbackQuote, userTexts)
       model[key] = validFallback ? 'confirmed' : 'conjectured'
       nextEvidence[key] = validFallback ? fallbackQuote : null
     } else if (model[key] === 'confirmed') {
@@ -210,6 +220,28 @@ function applyMentalModel({ candidate, evidenceCandidate, fallbackModel, fallbac
     }
   }
   return { mentalModel: model, mentalModelEvidence: nextEvidence }
+}
+
+function isCertainFullUtterance(evidence, userTexts) {
+  const normalizedEvidence = squash(evidence)
+  if (!normalizedEvidence || /[?？]\s*$|(?:かな|かも(?:しれない)?|と思う|でしょうか|ですか|ますか|だろう)\s*[。！？!?]*$/u.test(evidence.trim())) {
+    return false
+  }
+  return userTexts.some(text => squash(text) === normalizedEvidence)
+}
+
+function gateMentalModelOnExpectations(mentalModel, mentalModelEvidence, expectationStates, expectationList) {
+  const model = { ...mentalModel }
+  const evidence = { ...mentalModelEvidence }
+  for (const dimension of ['why', 'how']) {
+    const required = expectationList.filter(item => item.dimension === dimension || item.dimension === 'both')
+    const stateById = new Map(expectationStates.map(item => [item.id, item.status]))
+    if (model[dimension] === 'confirmed' && required.some(item => stateById.get(item.id) !== 'covered')) {
+      model[dimension] = 'conjectured'
+      evidence[dimension] = null
+    }
+  }
+  return { mentalModel: model, mentalModelEvidence: evidence }
 }
 
 // ---------- 焦点と支援段階 ----------
@@ -256,20 +288,26 @@ export function settleOpportunisticState({ parsed, prev, expectationList, trapLi
 
   const { states: expectationStates, downgraded } = applyExpectationUpdates(
     prev.expectationStates, parsed.expectationUpdates, expectationList, userTexts)
-  const { mentalModel, mentalModelEvidence } = applyMentalModel({
+  const judgedMentalModel = applyMentalModel({
     candidate: parsed.mentalModel,
     evidenceCandidate: parsed.mentalModelEvidence,
     fallbackModel: prev.mentalModel,
     fallbackEvidence: prev.mentalModelEvidence,
     userTexts,
   })
+  const { mentalModel, mentalModelEvidence } = gateMentalModelOnExpectations(
+    judgedMentalModel.mentalModel,
+    judgedMentalModel.mentalModelEvidence,
+    expectationStates,
+    expectationList,
+  )
   const trapStates = applyTrapUpdates(prev.trapStates, parsed.trapUpdates, trapList)
   const next = { expectationStates, mentalModel, mentalModelEvidence, trapStates }
   const { ok, gaps } = evaluateCompletion(next)
 
   if (prev.phase === 'done') {
-    // reopen の検証
-    if (ok) {
+    // 終了後、理解の不足を明示された場合は追加確認のため再開できる。
+    if (ok && parsed.reopen !== true) {
       return { ...base, ...pickState(prev), focus: null, phase: 'done', pendingWrapUp: false,
         completionRejected: ['reopen の根拠（triggered の罠 / 未到達の期待）が無い'] }
     }

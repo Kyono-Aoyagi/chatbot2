@@ -20,11 +20,11 @@ Python等のコード読解をチャット形式で支援する研究用プロ�
 
 - `mentalModel`: `{ why, how }`。各状態は `unresolved | conjectured | confirmed`。
 - `mentalModelEvidence`: confirmed 判定の根拠となる学習者発話の引用。
-- `expectationStates`: 問題の説明期待ごとの `missing | partial | covered` と発話根拠。
-- `trapStates`: `untouched | triggered | cleared`。
+- `expectationStates`: 問題の説明期待ごとの `dimension`（`why | how | both`）、`missing | partial | covered`、発話根拠。
+- `trapStates`: `untouched | triggered | cleared`。理解確認のために尋ねた罠へ正答した場合も `cleared` にできます。
 - `focus`, `phase`（`reading | done`）, `pendingWrapUp`。
 
-why はコード全体の目的・入力・出力、how は処理の流れ・条件・変数更新による実現方法を指します。`opportunisticPrompt.js` は毎ターン状態を判定するよう指示します。自己申告、疑問形の推測、チューター説明への単純な同意だけでは confirmed にしません。confirmed の根拠は実際のユーザー発話に含まれる必要があり、サーバー側で引用の存在を検証します。正誤の意味判断そのものはLLMを含むため、ログ分析・人手採点で別途確認してください。
+why はコード全体の目的・入力・出力、how は処理の流れ・条件・変数更新による実現方法を指します。`opportunisticPrompt.js` は毎ターン状態を判定するよう指示します。自己申告、疑問形の推測、チューター説明への単純な同意だけでは confirmed にしません。confirmed の根拠は実際のユーザー発話全文であり、サーバー側で一致と疑問・推測表現の有無を検証します。さらに、why/howに対応する期待項目がすべて covered でない限り、その次元をconfirmedにできません。正誤の意味判断そのものはLLMを含むため、ログ分析・人手採点で別途確認してください。
 
 読解終了のサーバー条件（`evaluateCompletion()`）:
 
@@ -33,6 +33,8 @@ why はコード全体の目的・入力・出力、how は処理の流れ・条
 3. triggered の罠が残っていない。
 
 `untouched` の罠は終了を妨げません。LLMが終了を求めても条件未達なら終了させません。参加者の「理解できた」ボタンは自己申告として別にログし、条件未達なら `closed_with_gaps` と理由を記録します。why/how等の内部状態は参加者画面に表示しません。
+
+読解完了後でも、学習者が理解確認の不足を明示した場合は、追加確認のため `reopen` を受け付けます。
 
 ## ログと管理画面
 
@@ -60,6 +62,7 @@ why はコード全体の目的・入力・出力、how は処理の流れ・条
 - `opportunisticPrompt.js` またはモデル出力の意味・判定基準を変えたら、`api/_lib/gemini.js` の `PROMPT_VERSION` を更新してください。
 - 変更は一度に一箇所ずつ行い、比較できるようGit差分と版IDを残してください。
 - `reference.why/how` はチューターの判定基準です。参加者に正解として直接提示しないでください。
+- `expectations` は `{dimension:'why'|'how'|'both', text:string}` の配列で定義し、終了前に確認する重要ポイントを問題ごとに明示してください。全trapを一律に質問する代わりに、学習目的に直結する設計理由や典型的な誤解を期待項目に含めます。
 - `traps` はよくある誤解です。未言及の罠を機械的に質問して網羅させず、誤解が現れたときに扱います。
 - 研究上のwhy/how評価では、LLMの自己判定ログと独立した説明ルーブリックによる採点を区別してください。
 - Letovskyのモデルを厳密に実装したとは表現せず、文献確認済みの範囲で「着想を得た」と記述してください。
