@@ -15,7 +15,7 @@ export const MODEL_NAME = 'gemini-3.1-flash-lite'
 // プロンプト（TUTOR_RULES* / STEP_FOCUS / buildSystemPrompt / opportunisticPrompt.js）を変更したときは、
 // この値を手で更新すること。ログに記録され、「どの版のプロンプトで取った会話か」を後から区別できるようにする。
 // 形式は日付+アルファベット。
-export const PROMPT_VERSION = '2026-10-27d'
+export const PROMPT_VERSION = '2026-11-10a'
 
 // 返答が空だったときにユーザーへ出す文（モデルが空文字を返すことがある）。
 const EMPTY_REPLY_FALLBACK = 'うまく返答を作れませんでした。もう一度送ってもらえますか。'
@@ -257,7 +257,8 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
 
   const attempt = parseReply(result.response.text())
   const noState = { tutorState: prev, move: null, note: null, userAct: null, phaseEvent: null,
-    completionRejected: null, forcedWrapUp: false, downgraded: [] }
+    completionRejected: null, forcedWrapUp: false, downgraded: [],
+    usageMetadata: result.response.usageMetadata ?? null }
 
   if (attempt.parseFailed) {
     // 解析に失敗した場合は、生テキストを返答にして、状態は直前のものを維持する。
@@ -276,6 +277,7 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
     parseFailed: false,
     retries,
     apiCallMs,
+    usageMetadata: result.response.usageMetadata ?? null,
   }
 
   if (!isOpportunistic) {
@@ -290,8 +292,15 @@ export async function askGemini({ activeCode, currentStep, userMessage, history,
   ]
   const settled = settleOpportunisticState({ parsed, prev, expectationList, trapList, userTexts })
 
-  // 終了条件を満たしたのに締めくくられなかった状態が続いたときの打ち切り（返答を固定の締めくくりに置き換える）
-  if (settled.forcedWrapUp) reply = FORCED_WRAP_UP_REPLY
+  // 終了表現や最終返答はサーバー状態に合わせる。LLMの終了申告と運用上の状態を食い違わせない。
+  if (settled.phaseEvent === 'complete' || settled.forcedWrapUp) reply = FORCED_WRAP_UP_REPLY
+  else if (settled.completionRejected?.length) {
+    const missing = settled.expectationStates.find(item => item.status !== 'covered')
+    const expectation = expectationList.find(item => item.id === missing?.id)
+    reply = expectation
+      ? `まだ確認できていない点があります。「${expectation.text}」について、コードのどの処理が説明の根拠になるか、自分の言葉で説明できますか？`
+      : 'まだ確認できていない点があります。コードのどの処理が説明の根拠になるか、自分の言葉で説明できますか？'
+  }
 
   const { userAct, move, downgraded, completionRejected, forcedWrapUp, phaseEvent, ...state } = settled
   return {

@@ -5,8 +5,18 @@ import { insertLog } from './_lib/supabase.js'
 // codeId: どの問題か。turn: このセッションの何ターン目のユーザー発言か（history中のuser発言数+1）。
 // promptVersion / model: どの版のプロンプト・モデルで取った会話かを後から区別するため。
 function buildLogContext(body) {
-  const { activeCode, currentStep, history, sessionId, condition } = body ?? {}
+  const { activeCode, currentStep, history, sessionId, condition, studyContext } = body ?? {}
   const turn = Array.isArray(history) ? history.filter(m => m?.role === 'user').length + 1 : 1
+  const cleanToken = (value, maxLength = 32) => {
+    const token = String(value ?? '').trim()
+    return /^[A-Za-z0-9_-]+$/.test(token) && token.length <= maxLength ? token : null
+  }
+  const round = ['1', '2', 'pre', 'post'].includes(String(studyContext?.round))
+    ? String(studyContext.round)
+    : null
+  const order = Number.isInteger(studyContext?.problemOrder) && studyContext.problemOrder > 0
+    ? studyContext.problemOrder
+    : null
   return {
     sessionId,
     condition,
@@ -15,6 +25,15 @@ function buildLogContext(body) {
     turn,
     promptVersion: PROMPT_VERSION,
     model: MODEL_NAME,
+    deployedCommitId: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+    studyContext: {
+      schemaVersion: 'study-log-v1',
+      participantId: cleanToken(studyContext?.participantId),
+      round,
+      problemSetId: cleanToken(studyContext?.problemSetId),
+      problemOrder: order,
+      isTest: studyContext?.isTest === true,
+    },
   }
 }
 
@@ -38,6 +57,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'activeCode.code と userMessage は必須です。' })
     }
 
+    const receivedAt = new Date().toISOString()
     const t0 = Date.now()
     const result = await askGemini({ activeCode, currentStep, userMessage, history, condition, tutorState })
     const totalMs = Date.now() - t0
@@ -50,6 +70,7 @@ export default async function handler(req, res) {
     // guidedのステップ遷移は currentStep（送信時点）と advance から導出できるので、step_change は別に残さない。
     await insertLog({
       ...context,
+      receivedAt,
       eventType: 'chat',
       userMessage,
       reply,
@@ -74,6 +95,7 @@ export default async function handler(req, res) {
       downgraded: result.downgraded,
       totalMs,
       apiCallMs: result.apiCallMs,
+      usageMetadata: result.usageMetadata ?? null,
     })
 
     // 読解の終了・再開は、後から「何ターンで終わったか」を集計できるよう独立したイベントにも残す。

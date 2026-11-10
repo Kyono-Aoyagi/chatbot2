@@ -83,11 +83,11 @@ export function getUserDeclaredDoneMessage() {
 // サーバーレス関数はリクエスト間で状態を共有できないため、会話履歴(history)は
 // クライアント側(messages state)で保持し、毎回のリクエストに含めて送る。
 // history は [{role:'user'|'bot', content:string}, ...] の形（今回送るuserMessage自体は含めない）。
-export async function sendToGemini({ sessionId, activeCode, currentStep, userMessage, history, condition }) {
+export async function sendToGemini({ sessionId, studyContext, activeCode, currentStep, userMessage, history, condition }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, activeCode, currentStep, userMessage, history, condition }),
+    body: JSON.stringify({ sessionId, studyContext, activeCode, currentStep, userMessage, history, condition }),
   })
 
   if (!response.ok) {
@@ -114,12 +114,13 @@ export async function sendToGemini({ sessionId, activeCode, currentStep, userMes
 
 // opportunistic条件専用の送信関数。
 // stepの代わりに tutorState を毎回送受信する（サーバーレスなので状態はクライアント側が持つ）。
-export async function sendToGeminiOpportunistic({ sessionId, activeCode, tutorState, userMessage, history }) {
+export async function sendToGeminiOpportunistic({ sessionId, studyContext, activeCode, tutorState, userMessage, history }) {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       sessionId,
+      studyContext,
       activeCode,
       userMessage,
       history,

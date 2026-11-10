@@ -182,18 +182,18 @@ export function applyTrapUpdates(prevStates, updates, list) {
 
 // ---------- 終了条件 ----------
 
-// 終了条件: すべての期待が covered で、triggered（誤解の兆候が出て未解消）の罠が無い。
-// untouched の罠は終了を妨げない（罠を確認するために、ユーザーが触れていない点を探し回らせないため）。
-// 戻り値: { ok, gaps }  gaps は満たせていない理由（ログと「理解できた」ボタンの記録に使う）。
-export function evaluateCompletion({ expectationStates, trapStates, mentalModel } = {}) {
+// 読解終了の運用条件: 問題ごとに定義した期待がすべて covered。
+// mentalModel(why/how)とtrap状態はLLMによる補助的な会話記録であり、研究上の理解評価や終了可否には使わない。
+// trapは発言に誤解が出たときに扱うが、誤解の意味判定にLLMが関与するため終了条件からは外す。
+// 戻り値: { ok, gaps }。これは会話を終えるための運用状態で、学習成果の評価ではない。
+export function evaluateCompletion({ expectationStates } = {}) {
   const gaps = []
-  if (mentalModel?.why !== 'confirmed') gaps.push('why が confirmed ではない')
-  if (mentalModel?.how !== 'confirmed') gaps.push('how が confirmed ではない')
+  if (!Array.isArray(expectationStates) || expectationStates.length === 0) {
+    gaps.push('確認ポイントがありません')
+    return { ok: false, gaps }
+  }
   for (const e of expectationStates ?? []) {
     if (e.status !== 'covered') gaps.push(`期待が未到達: ${e.id}（${e.status}）`)
-  }
-  for (const t of trapStates ?? []) {
-    if (t.status === 'triggered') gaps.push(`罠が未解消: ${t.id}`)
   }
   return { ok: gaps.length === 0, gaps }
 }
@@ -315,7 +315,7 @@ export function settleOpportunisticState({ parsed, prev, expectationList, trapLi
       focus: computeFocus({ prevFocus: null, focusId: parsed.focus, prev, next }) }
   }
 
-  // 読解中
+  // 読解中。終了は問題ごとの確認ポイントだけで決める。why/how と罠は補助ログ。
   if (!ok) {
     return { ...base, ...next, downgraded, phase: 'reading', pendingWrapUp: false,
       // 締めくくりの返答なのに条件を満たしていない（ユーザーには終わったように見える）。ログに残す。

@@ -27,17 +27,16 @@ function fmtDuration(ms) {
   return `${Math.floor(sec / 60)}分${sec % 60}秒`
 }
 
-// move（チューターが選んだ一手）の表示。色は道筋を一目で追うためのもの。
+// move（LLMが申告した一手）の表示。ログ確認用であり、研究成果の評価には使わない。
 const MOVE_META = {
-  bottom_up: { label: '割り込み', color: '#2e9e5b' },
-  revisit: { label: '再訪', color: '#2b7bd6' },
-  top_down: { label: 'トップダウン', color: '#7a8aa0' },
-  narrow: { label: '問いを絞る', color: '#e08a1e' },
-  trace: { label: '小入力で追う', color: '#c9a400' },
-  switch: { label: '観点を移す', color: '#8a4fd6' },
-  correct: { label: '指摘対応', color: '#d6456b' },
+  pump: { label: '開いた問い', color: '#2e9e5b' },
+  hint: { label: '見る場所を示す', color: '#2b7bd6' },
+  prompt: { label: '小さな問い', color: '#e08a1e' },
+  assertion: { label: '短い説明', color: '#c9a400' },
+  feedback: { label: '正誤を伝える', color: '#8a4fd6' },
+  repair: { label: '不満に応じる', color: '#d6456b' },
   wrap_up: { label: '終了', color: '#1f7a8c' },
-  answer: { label: '直接回答', color: '#5c6bc0' },
+  answer: { label: '質問に回答', color: '#5c6bc0' },
   other: { label: 'その他', color: '#999999' },
 }
 
@@ -104,11 +103,13 @@ function summarizeSession(s) {
 
   const condition = pick('condition')
   const codeId = pick('codeId')
+  const studyContext = s.start?.studyContext ?? s.chats.find(c => c.payload?.studyContext)?.payload?.studyContext ?? null
 
   return {
     id: s.id,
     condition,
     codeId,
+    studyContext,
     title: s.start?.title ?? codeId ?? '(不明)',
     difficulty: s.start?.difficulty ?? null,
     promptVersion: firstChat?.promptVersion ?? null,
@@ -279,7 +280,7 @@ export function renderSessionList({ sessions, filters, options, truncated, confi
     return `
     <tr>
       <td>${escapeHtml(fmtTime(s.startedAt))}</td>
-      <td>${escapeHtml(s.title)}${s.difficulty ? `<br><small>難易度 ${escapeHtml(s.difficulty)}</small>` : ''}</td>
+      <td>${escapeHtml(s.title)}${s.difficulty ? `<br><small>難易度 ${escapeHtml(s.difficulty)}</small>` : ''}<br><small>${escapeHtml(s.studyContext?.participantId ?? 'ID未設定')} ・ ${escapeHtml(s.studyContext?.round ?? '回未設定')} ・ ${escapeHtml(s.studyContext?.problemSetId ?? 'セット未設定')} ${s.studyContext?.problemOrder ? `・ 問${escapeHtml(s.studyContext.problemOrder)}` : ''}</small></td>
       <td>${conditionBadge(s.condition)}</td>
       <td>${s.turns}</td>
       <td>${completionCell(s)}</td>
@@ -299,7 +300,7 @@ export function renderSessionList({ sessions, filters, options, truncated, confi
     <p class="meta">${sessions.length}セッション表示中${truncated ? '（直近のイベントのみ集計。古いセッションは一部欠けている可能性があります）' : ''}</p>
     <table>
       <thead>
-        <tr><th>開始</th><th>問題</th><th>mode</th><th>ターン</th><th>終了</th><th>所要</th><th>最終状態</th><th>道筋（move）</th><th>問題点</th><th>プロンプト版</th><th></th></tr>
+        <tr><th>開始</th><th>問題・研究条件</th><th>mode</th><th>ターン</th><th>終了</th><th>所要</th><th>LLMのwhy/how申告（参考）</th><th>AIの一手申告（参考）</th><th>問題点</th><th>プロンプト版</th><th></th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`
@@ -434,7 +435,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
 
     let stateHtml = ''
     if (isOpp && p.mentalModel) {
-      stateHtml = `<div class="state">${renderMentalDiff(prevMental, p.mentalModel)}${renderMentalEvidence(p.mentalModelEvidence)}${renderExpectationDiff(prevExpectations, p.expectationStates)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
+      stateHtml = `<div class="state"><small>LLMの会話状態申告（研究成果の採点には不使用）</small><br>${renderMentalDiff(prevMental, p.mentalModel)}${renderMentalEvidence(p.mentalModelEvidence)}${renderExpectationDiff(prevExpectations, p.expectationStates)}${renderQuestionDiff(prevQuestions, p.openQuestions)}${renderTrapDiff(prevTraps, p.trapStates)}</div>`
       prevMental = p.mentalModel
       prevExpectations = p.expectationStates ?? []
       prevQuestions = p.openQuestions ?? []
@@ -458,7 +459,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
       <div><strong>${escapeHtml(summary.title)}</strong>${summary.difficulty ? `（難易度 ${escapeHtml(summary.difficulty)}）` : ''} ・ ${conditionBadge(summary.condition)}</div>
       <div>開始 ${escapeHtml(fmtTime(summary.startedAt))} ・ 所要 ${escapeHtml(fmtDuration(summary.durationMs))} ・ ${summary.turns}ターン</div>
       <div><small>プロンプト版 ${escapeHtml(summary.promptVersion ?? '-')} ・ モデル ${escapeHtml(summary.model ?? '-')} ・ ${escapeHtml(sessionId)}</small></div>
-      <div class="band">${summary.moves.map(m => moveChip(m.move, `ターン${m.turn}: ${MOVE_META[m.move]?.label ?? '-'}`)).join('')}</div>
+      <div class="band">${summary.moves.map(m => moveChip(m.move, `ターン${m.turn}: AI申告 ${MOVE_META[m.move]?.label ?? '-'}`)).join('')}</div>
     </div>`
     : `<div class="session-head">${escapeHtml(sessionId)}（該当するログがありません）</div>`
 

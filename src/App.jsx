@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
 import { STEP_LABELS, getInitialBotMessage, getInitialTutorState, getUserDeclaredDoneMessage, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
-import { generateSessionId, logEvent } from './utils/logger'
+import { generateSessionId, logEvent, readStudyContext } from './utils/logger'
 import { resolveCondition, CONDITION_LABELS } from './utils/condition'
 import './styles/global.css'
 
@@ -281,7 +281,7 @@ function ResultPanel({ expectedOutput, unlocked }) {
   )
 }
 
-function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
+function ChattingPhase({ activeCode, sessionId, condition, studyContext, onChangeCode }) {
   const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title, condition)])
   const [input, setInput] = useState('')
   const [step, setStep] = useState(condition === 'free' ? 'free' : condition === 'opportunistic' ? 'opportunistic' : 'purpose')
@@ -331,6 +331,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
         // opportunistic条件はstep進行ではなく、状態（tutorState）を毎回送受信して更新する。
         const botReply = await sendToGeminiOpportunistic({
           sessionId,
+          studyContext,
           activeCode,
           tutorState,
           userMessage: text,
@@ -350,6 +351,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       } else {
         const botReply = await sendToGemini({
           sessionId,
+          studyContext,
           activeCode,
           currentStep: step,
           userMessage: text,
@@ -412,6 +414,7 @@ function ChattingPhase({ activeCode, sessionId, condition, onChangeCode }) {
       mentalModelEvidence: tutorState.mentalModelEvidence,
       expectationStates: tutorState.expectationStates,
       trapStates: tutorState.trapStates,
+      studyContext,
     })
     setTimeout(scrollToBottom, 50)
   }
@@ -545,6 +548,7 @@ export default function App() {
   const [phase, setPhase] = useState('selecting') // 'selecting' | 'chatting'
   const [activeCode, setActiveCode] = useState(null)
   const [sessionId, setSessionId] = useState(null)
+  const [studyContext] = useState(readStudyContext)
   // セッション中は条件が変わらないようにマウント時に1回だけ解決する
   const [condition] = useState(resolveCondition)
 
@@ -553,6 +557,7 @@ export default function App() {
     setSessionId(newSessionId)
     setActiveCode(codeObj)
     setPhase('chatting')
+    const initialMessage = getInitialBotMessage(codeObj.title, condition)
     logEvent({
       sessionId: newSessionId,
       eventType: 'session_start',
@@ -563,6 +568,8 @@ export default function App() {
       difficulty: codeObj.difficulty,
       tags: codeObj.tags,
       condition,
+      studyContext,
+      initialAssistantMessage: initialMessage.content,
     })
   }
 
@@ -581,6 +588,7 @@ export default function App() {
       activeCode={activeCode}
       sessionId={sessionId}
       condition={condition}
+      studyContext={studyContext}
       onChangeCode={handleChangeCode}
     />
   )
