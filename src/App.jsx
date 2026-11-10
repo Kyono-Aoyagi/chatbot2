@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import { PRESET_CODES, createUserCode } from './data/codeLibrary'
 import { STEP_LABELS, getInitialBotMessage, getInitialTutorState, getUserDeclaredDoneMessage, sendToGemini, sendToGeminiOpportunistic } from './bot/geminiBot'
-import { generateSessionId, logEvent, readStudyContext } from './utils/logger'
+import { evaluateStudyResponses, generateSessionId, logEvent, readStudyContext } from './utils/logger'
+import { buildExperimentPlan, buildTaskStudyContext } from './data/experimentPlan'
 import { resolveCondition, CONDITION_LABELS } from './utils/condition'
 import './styles/global.css'
 
@@ -109,8 +110,11 @@ function Resizer({ direction, containerRef, ratio, setRatio, min = 0.2, max = 0.
 
 // ---- SelectionPhase ----
 
-function SelectionPhase({ onStart }) {
+function SelectionPhase({ onStart, onStartExperiment }) {
   const [tab, setTab] = useState('preset') // 'preset' | 'saved' | 'paste'
+  const [section, setSection] = useState('practice')
+  const [participantId, setParticipantId] = useState('')
+  const [studyStartError, setStudyStartError] = useState('')
   const [savedCodes, setSavedCodes] = useState(loadStoredUserCodes)
   const [pasteCode, setPasteCode] = useState('')
   const [pasteLanguage, setPasteLanguage] = useState('python')
@@ -146,11 +150,40 @@ function SelectionPhase({ onStart }) {
       <header className="header">
         <div>
           <h1>コードリーディング練習</h1>
-          <p>取り組むコードを選んでください</p>
+          <p>{section === 'experiment' ? '仮の実験手順で、順番に回答とログを記録します' : '取り組むコードを選んでください'}</p>
         </div>
       </header>
 
       <main className="selection-main">
+        <div className="mode-switch">
+          <button type="button" className={`tab-button ${section === 'practice' ? 'tab-button--active' : ''}`} onClick={() => setSection('practice')}>通常練習</button>
+          <button type="button" className={`tab-button ${section === 'experiment' ? 'tab-button--active' : ''}`} onClick={() => setSection('experiment')}>実験モード</button>
+        </div>
+
+        {section === 'experiment' ? (
+          <section className="experiment-card">
+            <h2>実験を始める</h2>
+            <p>匿名の参加者IDを入力してください。氏名など、個人を特定できる情報は入力しないでください。</p>
+            <label className="paste-form__label">
+              参加者ID
+              <input className="paste-form__input" value={participantId} maxLength={32} onChange={event => { setParticipantId(event.target.value); setStudyStartError('') }} placeholder="例: P01" />
+            </label>
+            <div className="experiment-notice">
+              <strong>試作用の仮設定</strong>
+              <p>チャット課題6問、ボットなし課題3問、短い仮アンケートの順に進みます。問題セットは参加者IDでA→B / B→Aに仮割当します。問題と事後課題は後から変更できます。</p>
+            </div>
+            {studyStartError && <p className="paste-form__error">{studyStartError}</p>}
+            <button type="button" className="primary-button" onClick={async () => {
+              const id = participantId.trim()
+              if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
+                setStudyStartError('参加者IDは英数字、ハイフン、アンダースコアで入力してください。')
+                return
+              }
+              const started = await onStartExperiment(id)
+              if (!started) setStudyStartError('研究ログを保存できませんでした。接続を確認してもう一度お試しください。')
+            }}>実験を開始</button>
+          </section>
+        ) : <>
         <div className="tab-bar">
           <button
             type="button"
@@ -255,6 +288,129 @@ function SelectionPhase({ onStart }) {
             </button>
           </div>
         )}
+        </>}
+      </main>
+    </div>
+  )
+}
+
+function StudyAssessmentPhase({ task, sessionId, studyContext, progress, onComplete }) {
+  const [answer, setAnswer] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [answerLogged, setAnswerLogged] = useState(false)
+  const [evaluationSaved, setEvaluationSaved] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async () => {
+    if (!answer.trim() || isSaving) return
+    setIsSaving(true)
+    setError('')
+    try {
+      if (!answerLogged) {
+        const saved = await logEvent({
+          sessionId,
+          eventType: 'assessment_response',
+          codeId: task.code.id,
+          responseText: answer.trim(),
+          studyContext,
+        })
+        if (!saved) throw new Error('回答ログを保存できませんでした。通信を確認して再送してください。')
+        setAnswerLogged(true)
+      }
+      if (!evaluationSaved) {
+        await evaluateStudyResponses({
+          sessionId,
+          codeId: task.code.id,
+          studyContext,
+          snapshots: [{ id: 'post_response', learnerText: answer.trim() }],
+        })
+        setEvaluationSaved(true)
+      }
+      await logEvent({ sessionId, eventType: 'assessment_complete', codeId: task.code.id, studyContext })
+      const completed = await onComplete()
+      if (!completed) throw new Error('次の課題を開始できませんでした。もう一度お試しください。')
+    } catch (submitError) {
+      setError(submitError.message)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="app">
+      <header className="header">
+        <div><h1>ボットなし課題</h1><p>実験 {progress.current} / {progress.total} ・ 問題 {task.order}</p></div>
+      </header>
+      <main className="assessment-layout">
+        <section className="assessment-code">
+          <h2>{task.code.title}</h2>
+          <CodeBlock code={task.code.code} />
+        </section>
+        <section className="assessment-form">
+          <p>このコードが何をするか、どのように実現しているかを、自分の言葉で説明してください。</p>
+          <textarea value={answer} onChange={event => setAnswer(event.target.value)} rows={10} disabled={isSaving || answerLogged} placeholder="説明を入力してください" />
+          {error && <p className="paste-form__error">{error}</p>}
+          <button type="button" className="primary-button" disabled={!answer.trim() || isSaving} onClick={submit}>
+            {isSaving ? '保存・採点中...' : evaluationSaved ? '次の課題へ進む' : answerLogged ? '採点を再試行' : '回答を送信して次へ'}
+          </button>
+          <small>この課題は一時的な仮問題です。回答と採点結果は研究ログに保存されます。</small>
+        </section>
+      </main>
+    </div>
+  )
+}
+
+function StudySurveyPhase({ sessionId, studyContext, onComplete }) {
+  const [usefulness, setUsefulness] = useState('')
+  const [helpfulReply, setHelpfulReply] = useState('')
+  const [difficultMoment, setDifficultMoment] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [surveyLogged, setSurveyLogged] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async () => {
+    if (!usefulness || isSaving) return
+    setIsSaving(true)
+    setError('')
+    try {
+      if (!surveyLogged) {
+        const saved = await logEvent({
+          sessionId,
+          eventType: 'study_survey',
+          studyContext,
+          responses: { usefulness: Number(usefulness), helpfulReply, difficultMoment },
+        })
+        if (!saved) throw new Error('アンケートを保存できませんでした。通信を確認して再送してください。')
+        setSurveyLogged(true)
+      }
+      const completed = await onComplete()
+      if (!completed) throw new Error('実験終了ログを保存できませんでした。もう一度お試しください。')
+    } catch (submitError) {
+      setError(submitError.message)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="app">
+      <header className="header"><div><h1>仮アンケート</h1><p>実験の最後の課題です</p></div></header>
+      <main className="survey-form">
+        <p className="experiment-notice">以下は画面とログ保存を確認するための仮質問です。研究用の質問項目は後から差し替えます。</p>
+        <label className="paste-form__label">チャットボットはコード理解に役立ちましたか？
+          <select className="paste-form__input" value={usefulness} disabled={surveyLogged} onChange={event => setUsefulness(event.target.value)}>
+            <option value="">選択してください</option>
+            {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label className="paste-form__label">役立った返答があれば記入してください
+          <textarea value={helpfulReply} disabled={surveyLogged} onChange={event => setHelpfulReply(event.target.value)} rows={3} />
+        </label>
+        <label className="paste-form__label">困った場面があれば記入してください
+          <textarea value={difficultMoment} disabled={surveyLogged} onChange={event => setDifficultMoment(event.target.value)} rows={3} />
+        </label>
+        {error && <p className="paste-form__error">{error}</p>}
+        <button type="button" className="primary-button" disabled={!usefulness || isSaving} onClick={submit}>{isSaving ? '保存中...' : '回答を送信して終了'}</button>
       </main>
     </div>
   )
@@ -281,12 +437,14 @@ function ResultPanel({ expectedOutput, unlocked }) {
   )
 }
 
-function ChattingPhase({ activeCode, sessionId, condition, studyContext, onChangeCode }) {
+function ChattingPhase({ activeCode, sessionId, condition, studyContext, isStudy = false, studyProgress, onStudyNext, onChangeCode }) {
   const [messages, setMessages] = useState(() => [getInitialBotMessage(activeCode.title, condition)])
   const [input, setInput] = useState('')
   const [step, setStep] = useState(condition === 'free' ? 'free' : condition === 'opportunistic' ? 'opportunistic' : 'purpose')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [isFinishingStudyTask, setIsFinishingStudyTask] = useState(false)
+  const [studyEvaluationSaved, setStudyEvaluationSaved] = useState(false)
   // opportunistic条件専用の状態（期待・罠の到達状況、支援段階、phase など。api/_lib/tutorState.js 参照）。サーバーが返した値をそのまま保持して毎回送る。
   // 内部状態（why/how や期待の達成状況）を参加者に見せると、「confirmed なら終わり」のように行動が左右されるため、画面には出さない。
   const [tutorState, setTutorState] = useState(getInitialTutorState)
@@ -401,10 +559,10 @@ function ChattingPhase({ activeCode, sessionId, condition, studyContext, onChang
   // 完了後も質問は続けられる。終了条件を満たしていなかったかどうか（closed_with_gaps）は、api/log.js がスナップショットから判定して記録する。
   const userTurns = messages.filter(m => m.role === 'user').length
   const handleDeclareDone = () => {
-    if (readingPhase !== 'reading' || isLoading || userTurns === 0) return
+    if (readingPhase !== 'reading' || isLoading || userTurns === 0) return Promise.resolve(false)
     setTutorState(current => ({ ...current, phase: 'done', pendingWrapUp: false, focus: null }))
     setMessages(prev => [...prev, getUserDeclaredDoneMessage()])
-    logEvent({
+    return logEvent({
       sessionId,
       eventType: 'session_complete',
       condition,
@@ -419,16 +577,45 @@ function ChattingPhase({ activeCode, sessionId, condition, studyContext, onChang
     setTimeout(scrollToBottom, 50)
   }
 
+  const finishStudyTask = async () => {
+    if (isLoading || isFinishingStudyTask || userTurns === 0) return
+    setIsFinishingStudyTask(true)
+    setError('')
+    try {
+      if (readingPhase === 'reading') {
+        const completionSaved = await handleDeclareDone()
+        if (!completionSaved) throw new Error('課題の終了状態を保存できませんでした。')
+      }
+      const learnerMessages = messages.filter(message => message.role === 'user').map(message => message.content).filter(Boolean)
+      if (!studyEvaluationSaved) {
+        await evaluateStudyResponses({
+          sessionId,
+          codeId: activeCode.id,
+          studyContext,
+          snapshots: [
+            { id: 'first_response', learnerText: learnerMessages[0] ?? '' },
+            { id: 'cumulative_learner_explanations', learnerText: learnerMessages.join('\n') },
+          ],
+        })
+        setStudyEvaluationSaved(true)
+      }
+      const advanced = await onStudyNext()
+      if (!advanced) throw new Error('次の課題を開始できませんでした。ログ保存を確認してください。')
+    } catch (finishError) {
+      setError(finishError.message)
+    } finally {
+      setIsFinishingStudyTask(false)
+    }
+  }
+
   return (
     <div className="app">
       <header className="header">
         <div>
           <h1>{activeCode.title}</h1>
-          <p>{activeCode.filename} ・ {CONDITION_LABELS[condition] ?? condition}</p>
+          <p>{activeCode.filename} ・ {isStudy ? `実験モード ${studyProgress.current} / ${studyProgress.total}` : CONDITION_LABELS[condition] ?? condition}</p>
         </div>
-        <button type="button" className="secondary-button" onClick={onChangeCode}>
-          コードを変更
-        </button>
+        {!isStudy && <button type="button" className="secondary-button" onClick={onChangeCode}>コードを変更</button>}
       </header>
 
       <main className="main" ref={mainRef}>
@@ -477,7 +664,11 @@ function ChattingPhase({ activeCode, sessionId, condition, studyContext, onChang
 
           {condition === 'opportunistic' && (
             <div className="open-questions" aria-label="読解の状態">
-              {readingPhase === 'done' ? (
+              {isStudy ? (
+                <button type="button" className="primary-button" onClick={finishStudyTask} disabled={isLoading || isFinishingStudyTask || userTurns === 0}>
+                  {isFinishingStudyTask ? '保存・採点中...' : 'この問題を終えて次へ'}
+                </button>
+              ) : readingPhase === 'done' ? (
                 <div className="open-questions__mental">✓ 読解完了（このあとも質問はできます）</div>
               ) : (
                 <button
@@ -545,9 +736,11 @@ function ChattingPhase({ activeCode, sessionId, condition, studyContext, onChang
 // ---- App ----
 
 export default function App() {
-  const [phase, setPhase] = useState('selecting') // 'selecting' | 'chatting'
+  const [phase, setPhase] = useState('selecting') // selecting | chatting | experiment | study-complete
   const [activeCode, setActiveCode] = useState(null)
   const [sessionId, setSessionId] = useState(null)
+  const [experiment, setExperiment] = useState(null)
+  const [studyTaskSessionId, setStudyTaskSessionId] = useState(null)
   const [studyContext] = useState(readStudyContext)
   // セッション中は条件が変わらないようにマウント時に1回だけ解決する
   const [condition] = useState(resolveCondition)
@@ -573,6 +766,71 @@ export default function App() {
     })
   }
 
+  const beginStudyTask = async (study, index) => {
+    const task = study.plan.tasks[index]
+    const taskSessionId = task.type === 'survey' ? study.id : generateSessionId()
+    setStudyTaskSessionId(taskSessionId)
+    const context = buildTaskStudyContext(study.participantId, task, studyContext.isTest)
+    if (task.type !== 'survey') {
+      const conditionForTask = task.type === 'chat' ? 'opportunistic' : 'botless_assessment'
+      const saved = await logEvent({
+        sessionId: taskSessionId,
+        eventType: 'session_start',
+        experimentId: study.id,
+        codeId: task.code.id,
+        source: 'preset',
+        title: task.code.title,
+        difficulty: task.code.difficulty,
+        tags: task.code.tags,
+        condition: conditionForTask,
+        studyContext: context,
+        initialAssistantMessage: task.type === 'chat'
+          ? getInitialBotMessage(task.code.title, 'opportunistic').content
+          : 'ボットなしでコードの目的と処理の流れを説明してください。',
+        experimentPlanVersion: study.plan.version,
+      })
+      return saved
+    }
+    return true
+  }
+
+  const handleStartExperiment = async (participantId) => {
+    const plan = buildExperimentPlan(participantId)
+    const study = { id: `study_${generateSessionId().slice(5)}`, participantId, plan, index: 0 }
+    const context = buildTaskStudyContext(participantId, { round: null, setId: 'START', order: null }, studyContext.isTest)
+    const studyStarted = await logEvent({
+      sessionId: study.id,
+      eventType: 'study_start',
+      studyContext: context,
+      experimentPlanVersion: plan.version,
+      setOrder: [plan.firstSet, plan.secondSet],
+      taskCount: plan.tasks.length,
+    })
+    if (!studyStarted) return false
+    const taskStarted = await beginStudyTask(study, 0)
+    if (!taskStarted) return false
+    setExperiment(study)
+    setPhase('experiment')
+    return true
+  }
+
+  const handleNextStudyTask = async () => {
+    if (!experiment) return false
+    const nextIndex = experiment.index + 1
+    if (nextIndex >= experiment.plan.tasks.length) {
+      const context = buildTaskStudyContext(experiment.participantId, { round: 'post', setId: 'COMPLETE', order: null }, studyContext.isTest)
+      const saved = await logEvent({ sessionId: experiment.id, eventType: 'study_complete', studyContext: context })
+      if (!saved) return false
+      setPhase('study-complete')
+      return true
+    }
+    const nextStudy = { ...experiment, index: nextIndex }
+    const started = await beginStudyTask(nextStudy, nextIndex)
+    if (!started) return false
+    setExperiment(nextStudy)
+    return true
+  }
+
   const handleChangeCode = () => {
     setPhase('selecting')
     setActiveCode(null)
@@ -580,7 +838,34 @@ export default function App() {
   }
 
   if (phase === 'selecting') {
-    return <SelectionPhase onStart={handleStart} />
+    return <SelectionPhase onStart={handleStart} onStartExperiment={handleStartExperiment} />
+  }
+
+  if (phase === 'experiment' && experiment) {
+    const task = experiment.plan.tasks[experiment.index]
+    const context = buildTaskStudyContext(experiment.participantId, task, studyContext.isTest)
+    const progress = { current: experiment.index + 1, total: experiment.plan.tasks.length }
+    if (task.type === 'assessment') {
+      return <StudyAssessmentPhase key={studyTaskSessionId} task={task} sessionId={studyTaskSessionId} studyContext={context} progress={progress} onComplete={handleNextStudyTask} />
+    }
+    if (task.type === 'survey') {
+      return <StudySurveyPhase key={studyTaskSessionId} sessionId={studyTaskSessionId} studyContext={context} onComplete={handleNextStudyTask} />
+    }
+    return <ChattingPhase
+      key={studyTaskSessionId}
+      activeCode={task.code}
+      sessionId={studyTaskSessionId}
+      condition="opportunistic"
+      studyContext={context}
+      isStudy
+      studyProgress={progress}
+      onStudyNext={handleNextStudyTask}
+      onChangeCode={() => {}}
+    />
+  }
+
+  if (phase === 'study-complete') {
+    return <div className="app"><header className="header"><div><h1>実験完了</h1><p>回答と仮アンケートを記録しました。ご協力ありがとうございました。</p></div></header><main className="selection-main"><div className="experiment-notice"><strong>試作版の実験モード</strong><p>問題セット、事後課題、アンケートは仮設定です。</p></div><button type="button" className="secondary-button" onClick={() => { setExperiment(null); setPhase('selecting') }}>開始画面へ戻る</button></main></div>
   }
 
   return (

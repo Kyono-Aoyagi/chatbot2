@@ -29,7 +29,7 @@ export async function insertLog(event) {
     // Supabase未設定でもアプリ本体は止めたくないので、フォールバックとしてconsole.logのみ行う
     console.warn('[supabase] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY が未設定のため保存をスキップしました。')
     console.log(JSON.stringify(event))
-    return
+    return false
   }
 
   const { sessionId, eventType, ...rest } = event
@@ -42,5 +42,7 @@ export async function insertLog(event) {
 
   if (error) {
     console.error('[supabase] insert failed:', error.message)
+    return false
   }
+  return true
 }

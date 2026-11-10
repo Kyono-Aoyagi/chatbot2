@@ -37,4 +37,5 @@ export const CONDITION_LABELS = {
   guided: '段階的ガイドモード',
   free: '自由質問モード',
   opportunistic: '日和見モード',
+  botless_assessment: 'ボットなし課題',
 }

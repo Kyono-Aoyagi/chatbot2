@@ -68,7 +68,7 @@ export default async function handler(req, res) {
     // チャットの往復をSupabaseに保存（本番ではVercel Logsではなくこちらを一次ソースにする）。
     // opportunistic条件では期待・why/how の理解状態と根拠発話・罠・支援段階のスナップショット（返答後）を保存する。
     // guidedのステップ遷移は currentStep（送信時点）と advance から導出できるので、step_change は別に残さない。
-    await insertLog({
+    const chatLogSaved = await insertLog({
       ...context,
       receivedAt,
       eventType: 'chat',
@@ -97,6 +97,9 @@ export default async function handler(req, res) {
       apiCallMs: result.apiCallMs,
       usageMetadata: result.usageMetadata ?? null,
     })
+    if (!chatLogSaved && context.studyContext?.participantId) {
+      return res.status(503).json({ error: '研究ログを保存できませんでした。回答は再送可能です。' })
+    }
 
     // 読解の終了・再開は、後から「何ターンで終わったか」を集計できるよう独立したイベントにも残す。
     // （ユーザーが「理解できた」ボタンで終えた場合は、クライアントが /api/log 経由で session_complete を送る）

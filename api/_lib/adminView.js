@@ -5,6 +5,7 @@ export const CONDITION_LABELS = {
   guided: '段階的ガイド',
   free: '自由質問',
   opportunistic: '日和見',
+  botless_assessment: 'ボットなし課題',
 }
 
 export function escapeHtml(value) {
@@ -74,15 +75,17 @@ export function groupSessions(rows) {
 
   for (const row of sorted) {
     if (!row.session_id) continue
-    if (!['session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen'].includes(row.event_type)) continue
+    if (!['session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen', 'assessment_response', 'study_evaluation'].includes(row.event_type)) continue
     if (!map.has(row.session_id)) {
-      map.set(row.session_id, { id: row.session_id, start: null, startRow: null, chats: [], errors: [], completes: [], reopens: [] })
+      map.set(row.session_id, { id: row.session_id, start: null, startRow: null, chats: [], errors: [], completes: [], reopens: [], assessments: [], evaluations: [] })
     }
     const s = map.get(row.session_id)
     if (row.event_type === 'session_start') { s.start = row.payload ?? {}; s.startRow = row }
     else if (row.event_type === 'chat') s.chats.push(row)
     else if (row.event_type === 'chat_error') s.errors.push(row)
     else if (row.event_type === 'session_complete') s.completes.push(row)
+    else if (row.event_type === 'assessment_response') s.assessments.push(row)
+    else if (row.event_type === 'study_evaluation') s.evaluations.push(row)
     else s.reopens.push(row)
   }
 
@@ -90,7 +93,7 @@ export function groupSessions(rows) {
 }
 
 function summarizeSession(s) {
-  const allRows = [s.startRow, ...s.chats, ...s.errors, ...s.completes, ...s.reopens].filter(Boolean)
+  const allRows = [s.startRow, ...s.chats, ...s.errors, ...s.completes, ...s.reopens, ...s.assessments, ...s.evaluations].filter(Boolean)
   const times = allRows.map(r => new Date(r.created_at).getTime())
   const startedAtMs = Math.min(...times)
   const lastAtMs = Math.max(...times)
@@ -118,7 +121,9 @@ function summarizeSession(s) {
     lastAtMs,
     startedAt: new Date(startedAtMs).toISOString(),
     durationMs: lastAtMs - startedAtMs,
-    turns: s.chats.length,
+    turns: s.chats.length || (s.assessments.length ? 1 : 0),
+    assessments: s.assessments.length,
+    evaluations: s.evaluations.length,
     errors: s.errors.length,
     retries: s.chats.reduce((n, c) => n + (Number(c.payload?.retries) || 0), 0),
     parseFailed: s.chats.filter(c => c.payload?.parseFailed === true).length,
@@ -375,7 +380,7 @@ function renderTrapDiff(prevList, nextList) {
 // rows: そのセッションの chat_logs 行（順不同でよい）
 export function renderSessionDetail({ sessionId, summary, rows, configured }) {
   const events = [...rows]
-    .filter(r => r.event_type === 'chat' || r.event_type === 'chat_error' ||
+    .filter(r => ['chat', 'chat_error', 'assessment_response', 'study_evaluation'].includes(r.event_type) ||
       (r.event_type === 'session_complete' && r.payload?.reason !== 'system'))
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
 
@@ -413,6 +418,28 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
           エラー（${p.transient ? '一時的' : 'その他'}・リトライ ${escapeHtml(p.retries ?? 0)}回）<br>
           <small>${escapeHtml(p.errorMessage ?? '')}</small>
         </div>
+      </div>`
+    }
+
+    if (row.event_type === 'assessment_response') {
+      return `
+      <div class="turn">
+        <div class="turn-label">${time} ・ ボットなし課題 / ${escapeHtml(p.codeId ?? '-')}</div>
+        <div class="bubble bubble--user">${escapeHtml(p.responseText ?? '')}</div>
+      </div>`
+    }
+
+    if (row.event_type === 'study_evaluation') {
+      const evaluation = p.evaluation ?? {}
+      const snapshots = Array.isArray(evaluation.snapshots) ? evaluation.snapshots : []
+      const scoreHtml = snapshots.map(snapshot => {
+        const criteria = Array.isArray(snapshot.criteria) ? snapshot.criteria : []
+        return `<section><strong>${escapeHtml(snapshot.id ?? '回答')}</strong>（網羅性 ${escapeHtml(snapshot.summary?.coverageMean ?? '-')} / 正確性 ${escapeHtml(snapshot.summary?.accuracyMean ?? '-')}）<ul>${criteria.map(item => `<li>${escapeHtml(item.id)} [${escapeHtml(item.dimension)}] 網羅 ${escapeHtml(item.coverage ?? '-')}・正確性 ${escapeHtml(item.accuracy ?? '-')} ${item.needsReview ? '<strong>要確認</strong>' : ''}<br>根拠:「${escapeHtml(item.evidence ?? '')}」</li>`).join('')}</ul></section>`
+      }).join('')
+      return `
+      <div class="turn">
+        <div class="turn-label">${time} ・ 自動採点（${escapeHtml(evaluation.rubricVersion ?? '-')} / ${escapeHtml(evaluation.judgeModel ?? '-') }）${evaluation.auditRecommended ? ' ・ 人手照合候補' : ''}</div>
+        <div class="state">${scoreHtml || '採点結果がありません'}<small>AI採点は参考値です。人手照合候補を確認してください。</small></div>
       </div>`
     }
 
@@ -475,7 +502,7 @@ export function renderSessionDetail({ sessionId, summary, rows, configured }) {
 // ---------- 生ログ（従来の表） ----------
 
 export function renderRawPage({ rows, eventType, sessionId, condition, limit, configured }) {
-  const eventTypes = ['session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen', 'result_shown', 'step_change', 'mental_state_change']
+  const eventTypes = ['study_start', 'study_complete', 'study_survey', 'session_start', 'chat', 'chat_error', 'session_complete', 'session_reopen', 'assessment_response', 'assessment_complete', 'study_evaluation', 'result_shown', 'step_change', 'mental_state_change']
 
   const form = `
     <form method="GET" class="filters">

@@ -42,10 +42,10 @@ why/how はLLMが会話を見て付ける補助的な自己申告です。終了
 - `api/_lib/adminView.js`: セッション集計と会話詳細を描画。opportunisticの会話詳細ではwhy/how状態の変化と根拠を表示します。
 - `api/admin.js`: 管理画面ルート（Basic認証設定が必要）。
 - Supabaseの `payload` はJSONBです。追加フィールドに通常テーブル変更は不要です。
-- `src/utils/logger.js` はURLから任意の匿名研究条件（`participantId`, `round`, `setId`, `order`, `isTest`）を読み、セッションとターンのログへ渡します。氏名などの個人情報をURLやログに入れないこと。
-- `scripts/score-study-logs.mjs` はSupabase JSON/JSONL出力から学習者発言だけを取り出し、問題ごとの期待を使って独立したAI採点を行います。出力には網羅性/正確性の要素別点数、発言引用、採点版、モデル、使用量を含めます。セッションIDから約20%を再現可能な方法で人手照合候補にします。AIの点数は確定評価ではありません。
-- 実行例: `node scripts/score-study-logs.mjs <Supabase JSON/JSONL export> <output.json>`。`GEMINI_API_KEY` は環境変数から読み、ログや出力へ含めません。
-- ボットなし事後課題は `assessment_response` イベント（`codeId`, `responseText`, `studyContext`）としてログに含めると、同じ採点スクリプトの対象になります。
+- `src/data/experimentPlan.js` は試作用の仮実験順を定義します。参加者IDからA/B順を固定し、チャット6問、ボットなし回答3問、仮アンケートを連続表示します。研究計画が決まったらセットと事後課題を差し替えること。
+- 実験ログはサイト上で `studyContext`（匿名参加者ID、回、問題セット、問題順、テスト有無）を付けて保存します。氏名などの個人情報を記録しないこと。
+- `api/study-evaluation.js` はチャットの初回/累積説明とボットなし回答を独立採点し、網羅性/正確性の要素別点数、発言根拠、採点版、モデル、使用量を `study_evaluation` として保存します。各参加者・問題を使って約20%を再現可能な方法で人手照合候補にします。AIの点数は確定評価ではありません。
+- 管理画面の生ログで `study_survey`, `study_evaluation`, `assessment_response` を確認できます。回答・採点結果の照合は同じサイトのBasic認証付き管理画面を使います。
 - ログに由来する文字列をHTMLへ出す場合は必ず `escapeHtml()` を通してください。
 
 ## 主要ファイル
@@ -57,6 +57,7 @@ why/how はLLMが会話を見て付ける補助的な自己申告です。終了
 - `api/_lib/gemini.js`: Gemini呼び出し、JSON解析、`PROMPT_VERSION`。
 - `api/_lib/opportunisticPrompt.js`: opportunisticシステムプロンプト。
 - `api/_lib/tutorState.js`: 状態の正規化、発話根拠の検証、会話上の終了判定。状態を研究成果として解釈しない。
+- `api/study-evaluation.js`: 実験ログの独立した自動採点。
 - `api/_lib/adminView.js`: 管理画面の集計・HTML。
 - `src/utils/logger.js`, `api/log.js`: クライアントイベントの記録。
 

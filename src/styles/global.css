@@ -112,6 +112,86 @@ select {
   gap: 20px;
 }
 
+.mode-switch {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.experiment-card,
+.experiment-notice,
+.survey-form,
+.assessment-form,
+.assessment-code {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.experiment-card h2,
+.assessment-code h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.experiment-card > p,
+.experiment-notice p,
+.assessment-form > p,
+.survey-form > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.experiment-notice {
+  gap: 6px;
+  padding: 12px;
+  background: var(--panel-muted);
+  font-size: 13px;
+}
+
+.assessment-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+  padding: 12px;
+}
+
+.assessment-code .code-block {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-muted);
+}
+
+.assessment-form textarea,
+.survey-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  line-height: 1.6;
+}
+
+.assessment-form small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.survey-form {
+  max-width: 720px;
+  width: calc(100% - 32px);
+  margin: 24px auto;
+}
+
 .tab-bar {
   display: flex;
   gap: 4px;
@@ -574,6 +654,16 @@ select {
 /* ---- レスポンシブ ---- */
 
 @media (max-width: 820px) {
+  .assessment-layout {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .assessment-code,
+  .assessment-form {
+    min-height: 260px;
+  }
+
   .main {
     flex-direction: column;
   }

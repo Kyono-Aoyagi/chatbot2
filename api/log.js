@@ -45,7 +45,10 @@ export default async function handler(req, res) {
       event.gaps = gaps
     }
 
-    await insertLog(event)
+    const saved = await insertLog(event)
+    if (!saved && event.studyContext?.participantId) {
+      return res.status(503).json({ error: '研究ログを保存できませんでした。通信状態を確認してください。' })
+    }
     return res.status(200).json({ ok: true })
   } catch (error) {
     console.error('[api/log error]', error)

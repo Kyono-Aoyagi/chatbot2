@@ -30,12 +30,27 @@ export function readStudyContext(search = window.location.search) {
 
 export async function logEvent(event) {
   try {
-    await fetch(`${API_BASE}/log`, {
+    const response = await fetch(`${API_BASE}/log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(event),
     })
+    return response.ok
   } catch (error) {
     console.warn('ログ保存に失敗しました', error)
+    return false
   }
+}
+
+export async function evaluateStudyResponses({ sessionId, codeId, studyContext, snapshots }) {
+  const response = await fetch(`${API_BASE}/study-evaluation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, codeId, studyContext, snapshots }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.error ?? `自動採点に失敗しました (${response.status})`)
+  }
+  return response.json()
 }
